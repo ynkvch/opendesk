@@ -1,0 +1,10 @@
+# your databases, logs and keys: never committed
+data/*
+!data/.gitkeep
+
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+web/node_modules/
+web/dist/

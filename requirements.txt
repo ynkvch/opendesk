@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn>=0.29
+# TWS API (server/greeks_at_entry.py, later the live listener)
+ib_async>=1.0
+certifi>=2024.2
+openpyxl>=3.1

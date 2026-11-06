@@ -1,0 +1,122 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+
+/*
+  Design tokens. Monochrome instrument UI: near-black surfaces, off-white ink,
+  one "accent" that is simply the brightest ink. Colour is reserved for sign (green up, red down)
+  and for data freshness (green on time, amber overdue, red stale).
+  Dark only, by request.
+*/
+@theme {
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', monospace;
+
+  --color-bg: #050505;        /* page */
+  --color-surface: #0a0a0a;   /* cards */
+  --color-surface-2: #111111; /* hover, raised */
+  --color-surface-3: #181818; /* selected */
+  --color-line: rgb(255 255 255 / 0.075);
+  --color-line-strong: rgb(255 255 255 / 0.14);
+
+  --color-ink: #ececea;       /* primary text, also the accent */
+  --color-ink-2: #a3a3a0;     /* secondary text */
+  --color-ink-3: #7b7b78;     /* muted labels, 4.6:1 on bg */
+
+  --color-pos: #4fbf82;       /* profit */
+  --color-neg: #e5645c;       /* loss */
+  --color-pos-soft: rgb(79 191 130 / 0.12);
+  --color-neg-soft: rgb(229 100 92 / 0.12);
+  --color-warn: #d9a441;      /* data overdue */
+  --color-info: #6fa8e6;      /* second reference line on charts */
+  --color-violet: #a48cf0;    /* third reference line on charts */
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+
+  --ease-out-quint: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: 'ss01', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: dark;
+}
+
+body {
+  min-height: 100dvh;
+  background: var(--color-bg);
+}
+
+::selection {
+  background: rgb(236 236 234 / 0.2);
+}
+
+/* Numbers line up in columns everywhere. */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+/* Contract codes and execution IDs. */
+.code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  letter-spacing: -0.01em;
+}
+
+/*
+  Panel with GhostEye's clipped top-right corner, softened by a small radius on the
+  other three. The clip removes the border along the cut, so ::after redraws it.
+*/
+.panel {
+  --cut: 14px;
+  position: relative;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+}
+.panel-cut {
+  clip-path: polygon(0 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% 100%, 0 100%);
+}
+.panel-cut::after {
+  /* runs from the start of the cut on the top edge down to the right edge;
+     the line's thickness falls inside the clip, so it stays visible */
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: calc(100% + 1px - var(--cut));
+  width: calc(var(--cut) * 1.4142);
+  height: 1px;
+  background: var(--color-line);
+  transform-origin: 0 0;
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+@keyframes fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Thin, quiet scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.12) transparent;
+}
+
+:focus-visible {
+  outline: 1px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

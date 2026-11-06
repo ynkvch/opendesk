@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Wakes every 15 minutes; run.py --due exits at once unless a source's release window is open. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.opendesk.signals</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>-B</string>
+    <string>-m</string>
+    <string>server.signals.run</string>
+    <string>--due</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__OPENDESK__</string>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__OPENDESK__/data/signals.log</string>
+  <key>StandardErrorPath</key>
+  <string>__OPENDESK__/data/signals.log</string>
+</dict>
+</plist>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Keeps the API and the built UI (web/dist) up on :8000; caffeinate -is holds off idle and system sleep while it runs. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.opendesk.api</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-is</string>
+    <string>__PYTHON__</string>
+    <string>-B</string>
+    <string>-m</string>
+    <string>uvicorn</string>
+    <string>server.api:app</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>8000</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__OPENDESK__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>__OPENDESK__/data/api.log</string>
+  <key>StandardErrorPath</key>
+  <string>__OPENDESK__/data/api.log</string>
+</dict>
+</plist>
