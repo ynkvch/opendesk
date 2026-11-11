@@ -16,15 +16,20 @@ except ImportError:
 BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)"
               " Chrome/130.0 Safari/537.36")
 
-# Minimum seconds between requests to the same host. SEC allows 10/s; the rest are pages
-# meant for people, so stay slow.
-PACE = {"data.sec.gov": 0.15, "www.sec.gov": 0.15, "efts.sec.gov": 0.3, "comtradeapi.un.org": 2.0, "fred.stlouisfed.org": 2.0,
-        "query1.finance.yahoo.com": 0.5}
+# minimum seconds between requests to the same host; anything not listed waits 0.3 s
+PACE = {"api.stlouisfed.org": 0.5, "query1.finance.yahoo.com": 0.5}
 _last: dict[str, float] = {}
 
 
 class FetchError(Exception):
     pass
+
+
+def _where(url: str) -> str:
+    """the url without its query string, for error messages: query strings carry api keys (fred's api_key), and
+    errors end up in logs and on the page."""
+    u = urlparse(url)
+    return f"{u.scheme}://{u.netloc}{u.path}"
 
 
 def fetch(url: str, *, ua: str = BROWSER_UA, data: dict | None = None, timeout: int = 45,
@@ -48,13 +53,13 @@ def fetch(url: str, *, ua: str = BROWSER_UA, data: dict | None = None, timeout: 
             if e.code in (429, 500, 502, 503, 504) and attempt < retries:
                 time.sleep(2 ** attempt * 3)
                 continue
-            raise FetchError(f"{e.code} {e.reason} for {url}") from e
+            raise FetchError(f"{e.code} {e.reason} for {_where(url)}") from e
         except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
             if attempt < retries:
                 time.sleep(2 ** attempt * 3)
                 continue
-            raise FetchError(f"{e} for {url}") from e
-    raise FetchError(f"gave up on {url}")
+            raise FetchError(f"{e} for {_where(url)}") from None  # from None: the original error repeats the url
+    raise FetchError(f"gave up on {_where(url)}")
 
 
 def fetch_json(url: str, **kw) -> dict | list:
