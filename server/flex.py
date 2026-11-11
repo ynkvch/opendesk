@@ -257,7 +257,7 @@ def journal_fill(conn, a: dict, when: datetime, stats: dict, history: dict) -> N
             h = history.get(conid)
             if not h or not h["first"] or not h["cost"]:
                 return
-            start = datetime.fromisoformat(h["first"]).replace(hour=20, tzinfo=timezone.utc)
+            start = datetime.fromisoformat(h["first"]).replace(hour=16, tzinfo=NY)  # that session's close
             open_journal_trade(conn, a, iso(start), h["cost"], h["qty"] or qty, 0.0, f"est-open-{conid}", conid,
                                estimated=True)
             existing = open_trade_for(conn, conid)

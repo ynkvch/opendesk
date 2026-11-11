@@ -21,12 +21,15 @@ the contract is taken from your current position in that symbol:
 import argparse
 import sys
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from types import SimpleNamespace
 
 from ib_async import IB, ExecutionFilter, Stock
 
 from . import bs
+
+NY = ZoneInfo("America/New_York")  # follows summer and winter time
 
 PORTS = {7496: "live TWS", 7497: "paper TWS", 4001: "live Gateway", 4002: "paper Gateway"}
 
@@ -97,7 +100,7 @@ def main() -> None:
         fills = ib.reqExecutions(ExecutionFilter(symbol=args.symbol.upper(), secType="OPT"))
     if args.date:
         day = date.fromisoformat(args.date)
-        fills = [f for f in fills if f.execution.time.astimezone(timezone(timedelta(hours=-4))).date() == day]
+        fills = [f for f in fills if f.execution.time.astimezone(NY).date() == day]
     opens = [f for f in fills if f.execution.side == "BOT"]
     if not opens:
         print(f"No {args.symbol} option buys returned by TWS ({len(fills)} fills in total).")
@@ -108,8 +111,7 @@ def main() -> None:
     for f in sorted(opens, key=lambda f: f.execution.time):
         c, e = f.contract, f.execution
         when = e.time.astimezone(timezone.utc)
-        expiry = datetime.strptime(c.lastTradeDateOrContractMonth[:8], "%Y%m%d").replace(
-            hour=20, tzinfo=timezone.utc)  # 16:00 New York
+        expiry = datetime.strptime(c.lastTradeDateOrContractMonth[:8], "%Y%m%d").replace(hour=16, tzinfo=NY)
         t_years = max((expiry - when).total_seconds() / (365 * 86400), 1e-6)
         dte = (expiry.date() - when.date()).days
         spot = underlying_price_at(ib, c.symbol, when)

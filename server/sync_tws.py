@@ -18,7 +18,7 @@ Run (from dashboard/):
 """
 import argparse
 import sys
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from math import log, sqrt
 from zoneinfo import ZoneInfo
 
@@ -29,8 +29,7 @@ from .db import connect as db_connect, journal_start
 from .fills import add_to_trade, reduce_trade, refresh_realized
 
 PORT = 7496
-NY = timezone(timedelta(hours=-4))  # EDT; good enough for session dates until November
-NY_TZ = ZoneInfo("America/New_York")
+NY = ZoneInfo("America/New_York")  # follows summer and winter time
 
 
 def iso(dt: datetime) -> str:
@@ -38,12 +37,13 @@ def iso(dt: datetime) -> str:
 
 
 def expiry_dt(c) -> datetime:
-    return datetime.strptime(c.lastTradeDateOrContractMonth[:8], "%Y%m%d").replace(hour=20, tzinfo=timezone.utc)
+    # options stop trading at 16:00 new york, whatever the season
+    return datetime.strptime(c.lastTradeDateOrContractMonth[:8], "%Y%m%d").replace(hour=16, tzinfo=NY)
 
 
 def options_open() -> bool:
     """US options regular session, 9:30-16:00 New York, weekdays (exchange holidays not checked)."""
-    now = datetime.now(NY_TZ)
+    now = datetime.now(NY)
     return now.weekday() < 5 and time(9, 30) <= now.time() < time(16)
 
 
@@ -235,17 +235,17 @@ def sync_trade(ib: IB, conn, t, portfolio: dict) -> None:
     # (a closed trade's exit day is not a full session held, so it stops the day before)
     closes = {}
     for x in ob:
-        if exited and x.date.astimezone(NY_TZ).date() >= exited.astimezone(NY_TZ).date():
+        if exited and x.date.astimezone(NY).date() >= exited.astimezone(NY).date():
             continue
         if x.date in ub and x.date >= opened.replace(minute=0, second=0):
-            closes[x.date.astimezone(NY_TZ).date().isoformat()] = (ub[x.date].close, x.close)
+            closes[x.date.astimezone(NY).date().isoformat()] = (ub[x.date].close, x.close)
     conn.executemany("INSERT OR REPLACE INTO option_daily VALUES (?,?,?,?)",
                      [(t["id"], d, u, o) for d, (u, o) in closes.items()])
     marks = []
     for i, x in enumerate(ob):
         # a bar's close is at the next bar's start (the first RTH bar is only 30 minutes)
         end = ob[i + 1].date if i + 1 < len(ob) and ob[i + 1].date.date() == x.date.date() \
-            else min(x.date + timedelta(hours=1), x.date.replace(hour=20, minute=0))
+            else min(x.date + timedelta(hours=1), x.date.astimezone(NY).replace(hour=16, minute=0))
         if end <= opened or x.date not in ub or (exited and end > exited):
             continue
         u = ub[x.date]
