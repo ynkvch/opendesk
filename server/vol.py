@@ -50,6 +50,7 @@ CACHE_SECONDS = 120  # a load answers from memory this long without an open page
 LIVE_EVERY = 60  # while the page is open, tws is read again this often (seconds)
 ACTIVE_FOR = 90  # a ticker counts as open while the page asked about it this recently
 HISTORY_RETRY = 30 * 60  # after a history build, wait at least this long before the next one
+INTRADAY_EVERY = 20 * 60  # in market hours, today's 5-minute bars are read again this often
 HISTORY_SESSIONS = 5
 HISTORY_CLIENT_ID = 51  # its own connection, so the slow bar requests don't hold up the minute-by-minute read
 TERM_TARGETS = [7, 14, 21, 30, 45, 60, 90, 120, 180, 270, 365]
@@ -97,8 +98,9 @@ CREATE TABLE IF NOT EXISTS option_oi (
     date    TEXT NOT NULL,           -- new york date it was received
     PRIMARY KEY (symbol, expiry, strike, right)
 );
--- 30-minute trade bars per option contract, from tws's historical data: past sessions' flow
-CREATE TABLE IF NOT EXISTS option_bars (
+-- 5-minute trade bars per option contract, from tws's historical data: today's and past sessions' flow.
+-- (the 30-minute tables option_bars and underlying_bars from earlier versions are no longer used.)
+CREATE TABLE IF NOT EXISTS option_bars_5m (
     symbol  TEXT NOT NULL,
     expiry  TEXT NOT NULL,
     strike  REAL NOT NULL,
@@ -107,9 +109,10 @@ CREATE TABLE IF NOT EXISTS option_bars (
     day     TEXT NOT NULL,           -- new york session date
     close   REAL NOT NULL,
     volume  REAL NOT NULL,
+    wap     REAL,                    -- volume-weighted average price of the bar's trades
     PRIMARY KEY (symbol, expiry, strike, right, time)
 );
-CREATE TABLE IF NOT EXISTS underlying_bars (
+CREATE TABLE IF NOT EXISTS underlying_bars_5m (
     symbol  TEXT NOT NULL,
     time    TEXT NOT NULL,
     day     TEXT NOT NULL,
@@ -719,34 +722,36 @@ def remember_oi(symbol: str, rows: list[dict], today: date) -> dict:
 
 
 def previous_session_volume(symbol: str, today: date) -> dict:
-    """each contract's volume in the last session before today, from the stored 30-minute bars."""
+    """each contract's volume in the last session before today, from the stored 5-minute bars."""
     with connect_db() as conn:
-        row = conn.execute("SELECT MAX(day) FROM option_bars WHERE symbol = ? AND day < ?", (symbol, today.isoformat())).fetchone()
+        row = conn.execute("SELECT MAX(day) FROM option_bars_5m WHERE symbol = ? AND day < ?", (symbol, today.isoformat())).fetchone()
         day = row[0] if row else None
         vols = {} if not day else {(x[0], x[1], x[2]): x[3] for x in conn.execute(
-            "SELECT expiry, strike, right, SUM(volume) FROM option_bars WHERE symbol = ? AND day = ? GROUP BY expiry, strike, right",
+            "SELECT expiry, strike, right, SUM(volume) FROM option_bars_5m WHERE symbol = ? AND day = ? GROUP BY expiry, strike, right",
             (symbol, day))}
     return {"day": day, "volumes": vols}
 
 
 def session_flow(symbol: str, sessions: int = HISTORY_SESSIONS) -> dict:
-    """call and put volume and premium per 30 minutes over the last sessions, with the share price, from stored bars."""
+    """call and put volume and premium per 5 minutes over the last sessions, with the share price, from stored bars.
+    premium is each bar's volume × its volume-weighted average price × 100: what was actually paid."""
     with connect_db() as conn:
-        days = [r[0] for r in conn.execute("SELECT DISTINCT day FROM underlying_bars WHERE symbol = ? ORDER BY day DESC LIMIT ?",
+        days = [r[0] for r in conn.execute("SELECT DISTINCT day FROM underlying_bars_5m WHERE symbol = ? ORDER BY day DESC LIMIT ?",
                                            (symbol, sessions))][::-1]
         if not days:
             return {"bars": [], "days": [], "contracts": 0}
         marks = ",".join("?" * len(days))
-        price = {r[0]: r[1] for r in conn.execute(f"SELECT time, close FROM underlying_bars WHERE symbol = ? AND day IN ({marks})",
+        price = {r[0]: r[1] for r in conn.execute(f"SELECT time, close FROM underlying_bars_5m WHERE symbol = ? AND day IN ({marks})",
                                                     (symbol, *days))}
         flow = {r[0]: r for r in conn.execute(
             "SELECT time,"
             " SUM(CASE WHEN right = 'C' THEN volume ELSE 0 END), SUM(CASE WHEN right = 'P' THEN volume ELSE 0 END),"
-            " SUM(CASE WHEN right = 'C' THEN volume * close * 100 ELSE 0 END), SUM(CASE WHEN right = 'P' THEN volume * close * 100 ELSE 0 END)"
-            f" FROM option_bars WHERE symbol = ? AND day IN ({marks}) GROUP BY time", (symbol, *days))}
-        contracts = conn.execute(f"SELECT COUNT(DISTINCT expiry || strike || right) FROM option_bars WHERE symbol = ? AND day IN ({marks})",
+            " SUM(CASE WHEN right = 'C' THEN volume * COALESCE(NULLIF(wap, 0), close) * 100 ELSE 0 END),"
+            " SUM(CASE WHEN right = 'P' THEN volume * COALESCE(NULLIF(wap, 0), close) * 100 ELSE 0 END)"
+            f" FROM option_bars_5m WHERE symbol = ? AND day IN ({marks}) GROUP BY time", (symbol, *days))}
+        contracts = conn.execute(f"SELECT COUNT(DISTINCT expiry || strike || right) FROM option_bars_5m WHERE symbol = ? AND day IN ({marks})",
                                  (symbol, *days)).fetchone()[0]
-        day_of = {r[0]: r[1] for r in conn.execute(f"SELECT time, day FROM underlying_bars WHERE symbol = ? AND day IN ({marks})",
+        day_of = {r[0]: r[1] for r in conn.execute(f"SELECT time, day FROM underlying_bars_5m WHERE symbol = ? AND day IN ({marks})",
                                                      (symbol, *days))}
     bars = []
     for t in sorted(price):
@@ -795,28 +800,40 @@ def history_pool(data: dict) -> list[tuple]:
     return [(r["expiry"], r["strike"], r["right"]) for r in rows]
 
 
-def history_due(symbol: str, pool: list[tuple]) -> bool:
-    """finished sessions don't change, so bars are read when a session is missing, or for contracts that have
-    started trading since the last read."""
+def in_session(now: datetime | None = None) -> bool:
+    """new york market hours, with a quarter of an hour after the close for the last bars to settle."""
+    now = now or datetime.now(NY)
+    t = now.time()
+    return now.weekday() < 5 and datetime.strptime("09:30", "%H:%M").time() <= t <= datetime.strptime("16:15", "%H:%M").time()
+
+
+def history_due(symbol: str, pool: list[tuple]) -> str | None:
+    """what the bars need: "full" when a finished session is missing or contracts have started trading since the
+    last read (finished sessions don't change), "today" every 20 minutes in market hours so today's bars keep up,
+    otherwise nothing."""
     st = _history.get(symbol)
-    if st and (st["running"] or clock.time() - st["built_at"] < HISTORY_RETRY):
-        return False
-    with connect_db() as conn:
-        last = conn.execute("SELECT MAX(day) FROM underlying_bars WHERE symbol = ?", (symbol,)).fetchone()[0]
-    if last is None or last < last_closed_session():
-        return True
-    seen = _fetched.get(symbol, {})
-    today = ny_today().isoformat()
-    return any(seen.get(k) != today for k in pool)
+    if st and st["running"]:
+        return None
+    if not st or clock.time() - st["built_at"] >= HISTORY_RETRY:
+        with connect_db() as conn:
+            last = conn.execute("SELECT MAX(day) FROM underlying_bars_5m WHERE symbol = ?", (symbol,)).fetchone()[0]
+        seen = _fetched.get(symbol, {})
+        today = ny_today().isoformat()
+        if last is None or last < last_closed_session() or any(seen.get(k) != today for k in pool):
+            return "full"
+    if in_session() and clock.time() - (st or {}).get("intraday_at", 0.0) >= INTRADAY_EVERY:
+        return "today"
+    return None
 
 
-async def build_history(symbol: str, keys: list[tuple]) -> None:
-    """30-minute trade bars for the flow contracts and the share, over the last sessions, into vol.db.
+async def build_history(symbol: str, keys: list[tuple], today_only: bool = False) -> None:
+    """5-minute trade bars for the flow contracts and the share, over the last sessions, into vol.db.
 
     one request per contract on its own tws connection, so the minute-by-minute read carries on. tws answers these
     one at a time (about 1 to 2 s each; asking for several at once only makes them time out), so a first build of
     300 contracts takes about ten minutes. strikes nearest the money go first, and the page redraws as they land.
-    later builds only read the last two sessions, once a day. contracts that have expired
+    later builds only read the last two sessions, once a day. in market hours, today_only re-reads just today's
+    bars (still forming) every 20 minutes, so the chart keeps up with the session. contracts that have expired
     are gone from tws, but their bars stay in vol.db once stored."""
     from ib_async import IB, Option, Stock
     st = _history.setdefault(symbol, {"running": False, "done": 0, "total": 0, "built_at": 0.0, "error": None})
@@ -826,6 +843,7 @@ async def build_history(symbol: str, keys: list[tuple]) -> None:
         await simulated_history(symbol, keys, st)
         return
     st.update(running=True, done=0, total=len(keys), error=None)
+    started = clock.time()
     ib = IB()
     try:
         for cid in (HISTORY_CLIENT_ID, HISTORY_CLIENT_ID + 1):
@@ -837,16 +855,16 @@ async def build_history(symbol: str, keys: list[tuple]) -> None:
         if not ib.isConnected():
             raise VolError("TWS isn't reachable for the trade history.")
         with connect_db() as conn:
-            last = conn.execute("SELECT MAX(day) FROM underlying_bars WHERE symbol = ?", (symbol,)).fetchone()[0]
+            last = conn.execute("SELECT MAX(day) FROM underlying_bars_5m WHERE symbol = ?", (symbol,)).fetchone()[0]
             stored = {(x[0], x[1], x[2]) for x in conn.execute(
-                "SELECT DISTINCT expiry, strike, right FROM option_bars WHERE symbol = ?", (symbol,))}
+                "SELECT DISTINCT expiry, strike, right FROM option_bars_5m WHERE symbol = ?", (symbol,))}
         recent = last and (ny_today() - date.fromisoformat(last)).days <= 3
-        duration = "2 D" if recent else f"{HISTORY_SESSIONS} D"
+        duration = "1 D" if today_only else "2 D" if recent else f"{HISTORY_SESSIONS} D"
         seen = _fetched.setdefault(symbol, {})
         today = ny_today().isoformat()
         missing_session = last is None or last < last_closed_session()
-        # a session missing: every contract again; otherwise only the ones not read today
-        keys = [k for k in keys if missing_session or seen.get(k) != today]
+        # a session missing: every contract again; otherwise only the ones not read today (today_only: all of them)
+        keys = [k for k in keys if today_only or missing_session or seen.get(k) != today]
         st["total"] = len(keys)
 
         def rows_of(bars) -> list[tuple]:
@@ -854,14 +872,14 @@ async def build_history(symbol: str, keys: list[tuple]) -> None:
             for x in bars:
                 t = x.date if isinstance(x.date, datetime) else datetime.combine(x.date, datetime.min.time(), timezone.utc)
                 out.append((t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), t.astimezone(NY).date().isoformat(),
-                            x.close, x.volume))
+                            x.close, x.volume, x.average if x.average and x.average > 0 else None))
             return out
 
         und = (await ib.qualifyContractsAsync(Stock(symbol, "SMART", "USD")))[0]
-        bars = await ib.reqHistoricalDataAsync(und, "", duration, "30 mins", "TRADES", True, 2, timeout=30)
+        bars = await ib.reqHistoricalDataAsync(und, "", duration, "5 mins", "TRADES", True, 2, timeout=30)
         with connect_db() as conn:
-            conn.executemany("INSERT OR REPLACE INTO underlying_bars VALUES (?,?,?,?)",
-                             [(symbol, t, d, c) for t, d, c, _ in rows_of(bars)])
+            conn.executemany("INSERT OR REPLACE INTO underlying_bars_5m VALUES (?,?,?,?)",
+                             [(symbol, t, d, c) for t, d, c, _, _ in rows_of(bars)])
         ids = {}
         for e in {k[0] for k in keys}:
             for cid, k, r, tc, mult in cached_contracts(symbol, e) or []:
@@ -871,17 +889,19 @@ async def build_history(symbol: str, keys: list[tuple]) -> None:
             if found:
                 c = Option(symbol, e, k, r, "SMART", found[2], "USD", tradingClass=found[1], conId=found[0])
                 # a contract never read before gets all five sessions
-                span = duration if (e, float(k), r) in stored else f"{HISTORY_SESSIONS} D"
+                span = duration if today_only or (e, float(k), r) in stored else f"{HISTORY_SESSIONS} D"
                 try:
-                    bars = await ib.reqHistoricalDataAsync(c, "", span, "30 mins", "TRADES", True, 2, timeout=10)
+                    bars = await ib.reqHistoricalDataAsync(c, "", span, "5 mins", "TRADES", True, 2, timeout=10)
                 except Exception:
                     bars = []
                 with connect_db() as conn:
-                    conn.executemany("INSERT OR REPLACE INTO option_bars VALUES (?,?,?,?,?,?,?,?)",
-                                     [(symbol, e, k, r, t, d, cl, v) for t, d, cl, v in rows_of(bars) if v and v > 0])
+                    conn.executemany("INSERT OR REPLACE INTO option_bars_5m VALUES (?,?,?,?,?,?,?,?,?)",
+                                     [(symbol, e, k, r, t, d, cl, v, wap) for t, d, cl, v, wap in rows_of(bars) if v and v > 0])
             seen[(e, k, r)] = today
             st["done"] += 1
         st["built_at"] = clock.time()
+        if in_session():
+            st["intraday_at"] = started  # any build in market hours has read today's bars too
     except Exception as e:
         st["error"] = str(e)
         st["built_at"] = clock.time()  # don't retry straight away
@@ -891,7 +911,7 @@ async def build_history(symbol: str, keys: list[tuple]) -> None:
 
 
 async def simulated_history(symbol: str, keys: list[tuple], st: dict) -> None:
-    """made-up 30-minute bars for the last sessions, so the page's history works without tws (VOL_SOURCE=sim)."""
+    """made-up 5-minute bars for the last sessions, so the page's history works without tws (VOL_SOURCE=sim)."""
     src = SimSource()
     await src.underlying(symbol)
     spot = (await src.spot(None))["spot"]
@@ -903,22 +923,22 @@ async def simulated_history(symbol: str, keys: list[tuple], st: dict) -> None:
         d -= timedelta(days=1)
     s, und_rows, opt_rows = spot * 0.95, [], []
     for day in reversed(days):
-        for slot in range(13):  # 09:30 to 16:00 new york, every 30 minutes
-            start = datetime.combine(day, datetime.min.time(), NY).replace(hour=9, minute=30) + timedelta(minutes=30 * slot)
+        for slot in range(78):  # 09:30 to 16:00 new york, every 5 minutes
+            start = datetime.combine(day, datetime.min.time(), NY).replace(hour=9, minute=30) + timedelta(minutes=5 * slot)
             t = start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            s *= math.exp(rng.gauss(0.0004, 0.006))
+            s *= math.exp(rng.gauss(0.00007, 0.0025))
             und_rows.append((symbol, t, day.isoformat(), round(s, 2)))
-            busy = 1.6 if slot in (0, 1, 12) else 1.0  # opens and closes are busier
+            busy = 1.6 if slot < 6 or slot >= 72 else 1.0  # the first and last half hour are busier
             for e, k, r in keys[:400]:
                 days_left = max((datetime.strptime(e, "%Y%m%d").date() - day).days, 1)
                 near = math.exp(-abs(math.log(k / s)) / 0.08)
-                vol = int(rng.lognormvariate(0, 1.1) * 60 * near * busy * (1.3 if r == "C" else 1.0))
+                vol = int(rng.lognormvariate(0, 1.1) * 10 * near * busy * (1.3 if r == "C" else 1.0))
                 if vol:
                     px = bs.price(r, s, k, days_left / 365, src._iv(k, s, days_left))
-                    opt_rows.append((symbol, e, k, r, t, day.isoformat(), round(max(px, 0.01), 2), vol))
+                    opt_rows.append((symbol, e, k, r, t, day.isoformat(), round(max(px, 0.01), 2), vol, round(max(px, 0.01), 2)))
     with connect_db() as conn:
-        conn.executemany("INSERT OR REPLACE INTO underlying_bars VALUES (?,?,?,?)", und_rows)
-        conn.executemany("INSERT OR REPLACE INTO option_bars VALUES (?,?,?,?,?,?,?,?)", opt_rows)
+        conn.executemany("INSERT OR REPLACE INTO underlying_bars_5m VALUES (?,?,?,?)", und_rows)
+        conn.executemany("INSERT OR REPLACE INTO option_bars_5m VALUES (?,?,?,?,?,?,?,?,?)", opt_rows)
     seen = _fetched.setdefault(symbol, {})
     for k in keys:
         seen[k] = ny_today().isoformat()
@@ -945,10 +965,32 @@ async def _pull(symbol: str) -> None:
             _cache[symbol] = {**(hit or {"data": None}), "_t": started, "error": str(e), "status": e.status}
 
 
+async def tws_listening() -> bool:
+    if os.environ.get("VOL_SOURCE") == "sim":
+        return True
+    try:
+        _, w = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", PORT), 1)
+        w.close()
+        return True
+    except Exception:
+        return False
+
+
+_tws_seen = {"at": 0.0, "up": False}
+
+
 async def _refresher() -> None:
-    """while a ticker's page is open, read it from tws again every minute, and its past sessions every half hour."""
+    """while a ticker's page is open, read it from tws again every minute and keep its bars current. in market hours
+    the last ticker opened is kept going even with no page open, as long as tws is running, so the day's flow is
+    recorded either way."""
     while True:
         now = clock.time()
+        if in_session():
+            if now - _tws_seen["at"] > 60:
+                _tws_seen.update(at=now, up=await tws_listening())
+            recent = watchlist()[:1]
+            if _tws_seen["up"] and recent:
+                _active[recent[0]["symbol"]] = now
         for sym, seen in list(_active.items()):
             if now - seen > ACTIVE_FOR:
                 _active.pop(sym, None)
@@ -962,8 +1004,9 @@ async def _refresher() -> None:
             hit = _cache.get(sym)
             if hit and hit.get("data"):
                 pool = history_pool(hit["data"])
-                if history_due(sym, pool):
-                    asyncio.create_task(build_history(sym, pool))
+                due = history_due(sym, pool)
+                if due:
+                    asyncio.create_task(build_history(sym, pool, today_only=due == "today"))
         await asyncio.sleep(3)
 
 
@@ -977,6 +1020,13 @@ def _payload(symbol: str) -> dict:
     # the page polls this; a new version means new data to draw
     data["version"] = f"{data['as_of']}|{len(data['sessions']['bars'])}|{st.get('done', 0)}|{int(st.get('built_at', 0))}"
     return data
+
+
+def start_background() -> None:
+    """called when the server starts, so recording doesn't wait for the page to be opened."""
+    global _loop
+    if _loop is None or _loop.done():
+        _loop = asyncio.create_task(_refresher())
 
 
 @router.get("")

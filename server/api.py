@@ -22,6 +22,12 @@ NY = ZoneInfo("America/New_York")
 app = FastAPI(title="opendesk")
 app.include_router(signals_router)
 app.include_router(vol_router)
+
+
+@app.on_event("startup")
+async def _start_vol_recording() -> None:
+    from .vol import start_background
+    start_background()
 DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
 
