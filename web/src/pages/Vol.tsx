@@ -262,8 +262,6 @@ function Flow({ v }: { v: Vol }) {
     return [...m.values()].sort((a, b) => a.strike - b.strike)
   }, [rows, metric])
 
-  const newC = rows.filter((r) => r.right === 'C').reduce((t, r) => t + (r.new ?? 0), 0)
-  const newP = rows.filter((r) => r.right === 'P').reduce((t, r) => t + (r.new ?? 0), 0)
 
   const value = (r: FlowRow, k: SortKey): number => k === 'expiry' ? Number(r.expiry) : k === 'ratio' ? (r.oi ? r.volume / r.oi : Infinity)
     : k === 'new' ? r.new ?? -1 : k === 'prev' ? r.prev_volume ?? -1 : (r[k as keyof FlowRow] as number | null) ?? -Infinity
@@ -296,25 +294,10 @@ function Flow({ v }: { v: Vol }) {
             Today, across every contract read so far: calls <span className="num text-pos">{usd(f.call_premium)}</span> on {count(f.call_volume)} contracts,
             puts <span className="num text-neg">{usd(f.put_premium)}</span> on {count(f.put_volume)}.
             {' '}Put/call premium <span className="num text-ink">{f.call_premium ? (f.put_premium / f.call_premium).toFixed(2) : '-'}</span>.
-            {f.underlying_call_volume != null && <> TWS's own count for the whole chain{traded ? '' : ', from the last session until the open'}: <span className="num text-pos">{count(f.underlying_call_volume)}</span> calls,
-              {' '}<span className="num text-neg">{count(f.underlying_put_volume ?? 0)}</span> puts.</>}
-            {f.since && <> Since {new Date(f.since).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}: <span className="num text-pos">+{count(newC)}</span> calls, <span className="num text-neg">+{count(newP)}</span> puts.</>}
           </p>
         </div>
-        <p className="max-w-[52ch] text-[11px] text-ink-3">
-          Read {f.coverage.read} of {f.coverage.chain} contracts in the chain so far today
-          {f.coverage.expiries_known < f.coverage.expiries ? ` (${f.coverage.expiries_known} of ${f.coverage.expiries} expiries listed yet)` : ''}:
-          the ones near the money every minute, the rest in rotation, so the totals reach every traded contract within a few minutes.
-          Charts and the table follow the filters; the totals don't.
-        </p>
       </div>
 
-      {!traded && (
-        <p className="rounded-[var(--radius-md)] border border-warn/30 bg-[rgb(217_164_65/0.08)] px-4 py-3 text-[13px] text-ink-2">
-          No {v.symbol} options have traded yet today. US options trade 09:30 to 16:00 New York; volume, premium and "New" fill in
-          from the open. Quotes, IV and open interest are available now.
-        </p>
-      )}
 
       <div className="panel flex flex-wrap items-end gap-x-5 gap-y-3 p-4">
         <div className="flex flex-col gap-1 text-[11px] text-ink-3">
@@ -368,8 +351,6 @@ function Flow({ v }: { v: Vol }) {
         </Card>
       </div>
 
-      <Sessions v={v} />
-
       <div className="panel overflow-x-auto">
         <table className="w-full min-w-[1080px] border-collapse text-[13px]">
           <thead className="text-left text-xs text-ink-3">
@@ -419,7 +400,7 @@ function Flow({ v }: { v: Vol }) {
         </table>
         {sorted.length > TOP && (
           <div className="flex items-center justify-between border-t border-line px-4 py-2 text-[12px] text-ink-3">
-            <span>{all ? `All ${sorted.length} contracts` : `Top ${TOP} of ${sorted.length} contracts`}, most traded first. Volume is today's; open interest is all contracts still open{rows.some((r) => r.oi_date && r.oi_date !== today) ? ' (* = last figure TWS sent, from an earlier day)' : ''}.</span>
+            <span>{all ? `All ${sorted.length} contracts` : `Top ${TOP} of ${sorted.length} contracts`}, most traded first.{rows.some((r) => r.oi_date && r.oi_date !== today) ? ' * = open interest TWS last sent on an earlier day.' : ''}</span>
             <button type="button" onClick={() => setAll((x) => !x)}
               className="h-7 rounded-[var(--radius-md)] border border-line-strong px-3 text-[12px] font-medium text-ink-2 hover:bg-surface-2 hover:text-ink">
               {all ? `Show top ${TOP}` : `See all ${sorted.length}`}
@@ -433,9 +414,27 @@ function Flow({ v }: { v: Vol }) {
 
 function Sessions({ v }: { v: Vol }) {
   const s = v.sessions
-  const [metric, setMetric] = useState<'volume' | 'premium'>('volume')
-  const bars = useMemo(() => s.bars.map((b) => ({ time: b.time, day: b.day, price: b.price,
-    calls: metric === 'volume' ? b.call_volume : b.call_premium, puts: metric === 'volume' ? b.put_volume : b.put_premium })), [s.bars, metric])
+  const [metric, setMetric] = useState<'volume' | 'premium'>('premium')
+  const [step, setStep] = useState<Step>('5m')
+  // the server sends 5-minute bars; 15 and 30 minutes are added up from them, within each session
+  const bars = useMemo(() => {
+    const size = STEP_MIN[step]
+    const out: { time: string; day: string; price: number; calls: number; puts: number }[] = []
+    for (const b of s.bars) {
+      const t = new Date(b.time)
+      const mins = t.getUTCHours() * 60 + t.getUTCMinutes()
+      const key = `${b.day}|${Math.floor(mins / size)}`
+      const calls = metric === 'volume' ? b.call_volume : b.call_premium
+      const puts = metric === 'volume' ? b.put_volume : b.put_premium
+      const last = out[out.length - 1]
+      if (last && `${last.day}|${Math.floor((new Date(last.time).getUTCHours() * 60 + new Date(last.time).getUTCMinutes()) / size)}` === key) {
+        last.calls += calls
+        last.puts += puts
+        last.price = b.price  // the bar's close is its last 5 minutes' close
+      } else out.push({ time: b.time, day: b.day, price: b.price, calls, puts })
+    }
+    return out
+  }, [s.bars, metric, step])
   const fmt = metric === 'premium' ? usd : count
   const calls = s.days.reduce((t, d) => t + (metric === 'volume' ? d.call_volume : d.call_premium), 0)
   const puts = s.days.reduce((t, d) => t + (metric === 'volume' ? d.put_volume : d.put_premium), 0)
@@ -445,22 +444,31 @@ function Sessions({ v }: { v: Vol }) {
     <div className="space-y-3">
       <Card tall title={`${v.symbol} flow`}
         reading={s.days.length ? <>
-          Call and put {metric} every 30 minutes, each averaged with the half-hours either side, with the share price in white. Over these sessions: calls <span className="num text-pos">{fmt(calls)}</span>,
+          Call and put {metric} every {STEP_MIN[step]} minutes, smoothed over about {STEP_MIN[step] * STEP_SPAN[step]} minutes, with the share price in white. Over these sessions: calls <span className="num text-pos">{fmt(calls)}</span>,
           puts <span className="num text-neg">{fmt(puts)}</span>{first && last ? <>, while {v.symbol} moved <span className="num text-ink">{pctSigned(last / first - 1)}</span></> : null}.
         </> : 'Reading each contract\'s trade history from TWS.'}
-        info={<p>TWS's 30-minute trade bars for each contract in the flow (the expiries and strikes above), summed into calls and puts. Premium is each bar's volume × its closing price × 100. Contracts that have already expired are gone from TWS, so last week's weeklies aren't in the early sessions until they've been stored here. Refreshed every 30 minutes while this page is open.</p>}
-        controls={<Segmented<'volume' | 'premium'> label="Measure" value={metric} onChange={setMetric}
-          options={[{ value: 'volume', label: 'Volume' }, { value: 'premium', label: 'Premium' }]} />}
+        info={<p>TWS's 5-minute trade bars for every option that has traded, summed into calls and puts; 15 and 30 minutes are added up from them. Premium is each bar's volume × its volume-weighted average price × 100. The bars come from IBKR's servers whenever TWS is open, so missed sessions are filled in later (up to five back); options that expired while TWS was closed can't be. Today's bars refresh every 20 minutes in market hours.</p>}
+        controls={<>
+          <Segmented<Step> label="Interval" value={step} onChange={setStep}
+            options={(['5m', '15m', '30m'] as Step[]).map((x) => ({ value: x, label: x }))} />
+          <Segmented<'volume' | 'premium'> label="Measure" value={metric} onChange={setMetric}
+            options={[{ value: 'premium', label: 'Premium' }, { value: 'volume', label: 'Volume' }]} />
+        </>}
         legend={<Legend items={[{ label: 'Calls', value: fmt(calls), color: 'var(--color-pos)' }, { label: 'Puts', value: fmt(puts), color: 'var(--color-neg)' },
           { label: `${v.symbol} price`, value: last?.toFixed(2), color: '#ececea' }]} />}
-        foot={s.building ? `Updating from TWS: ${s.done} of ${s.total} contracts read.` : s.error ? `Last update failed: ${s.error}` : `${s.contracts} contracts traded in these sessions.`}>
+        foot={s.building ? `Updating from TWS: ${s.done} of ${s.total} contracts read.` : s.error ? `Last update failed: ${s.error}` : `From TWS's 5-minute trade bars of ${s.contracts} different options (each strike, expiry and type counted once); premium is each bar's volume × its average traded price × 100. Today's bars refresh every 20 minutes in market hours.`}>
         {bars.length
-          ? <SessionFlowChart bars={bars} format={fmt} priceFormat={(x) => x.toFixed(2)} ariaLabel={`${v.symbol} call and put ${metric} over the past sessions`} />
-          : <Empty>{s.building ? `Reading each contract's 30-minute trade history from TWS: ${s.done} of ${s.total}. The first time takes a few minutes.` : s.error ? `Couldn't read the trade history: ${s.error}` : 'Starts reading the trade history within a few seconds.'}</Empty>}
+          ? <SessionFlowChart bars={bars} span={STEP_SPAN[step]} format={fmt} priceFormat={(x) => x.toFixed(2)} ariaLabel={`${v.symbol} call and put ${metric} over the past sessions`} />
+          : <Empty>{s.building ? `Reading each contract's 5-minute trade history from TWS: ${s.done} of ${s.total}. The first time takes a few minutes.` : s.error ? `Couldn't read the trade history: ${s.error}` : 'Starts reading the trade history within a few seconds.'}</Empty>}
       </Card>
     </div>
   )
 }
+
+type Step = '5m' | '15m' | '30m'
+const STEP_MIN: Record<Step, number> = { '5m': 5, '15m': 15, '30m': 30 }
+// how many bars each point averages: about 35 minutes at 5m, 45 at 15m, 90 at 30m
+const STEP_SPAN: Record<Step, number> = { '5m': 7, '15m': 3, '30m': 3 }
 
 // ---------- page ----------
 
@@ -585,27 +593,23 @@ export function VolPage({ path }: { path: string }) {
       {symbol && !v && !error && (
         <div className="space-y-4" aria-busy="true" aria-label="Loading">
           <p className="text-[13px] text-ink-3">Reading {symbol}'s option chain from TWS. A ticker's first load takes about a minute; after that, about 40 seconds.</p>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} className="h-[76px]" />)}</div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">{Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-[76px]" />)}</div>
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[450px]" />)}</div>
         </div>
       )}
 
       {v && (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
             <Tile label={`${v.symbol} spot`} value={v.spot.toFixed(2)} sub={change != null ? pctSigned(change) + ' today' : undefined}
               tone={change != null && change < 0 ? 'text-neg' : 'text-ink'} />
             <Tile label="30d implied" value={v.iv30 != null ? ivFmt(v.iv30) : '-'} sub="TWS index" />
             <Tile label="IV rank, 1 year" value={v.iv_rank != null ? (v.iv_rank * 100).toFixed(0) : '-'} sub="0 = low, 100 = high" />
             <Tile label="IV percentile, 1 year" value={v.iv_percentile != null ? ordinal(Math.round(v.iv_percentile * 100)) : '-'} sub="days below today" />
             <Tile label="30d realized" value={v.rv30 != null ? ivFmt(v.rv30) : '-'} sub={v.iv30 != null && v.rv30 != null ? `IV − RV ${pts((v.iv30 - v.rv30) * 100)}` : undefined} />
-            <Tile label="25Δ skew, 30d" value={v.skew25 != null ? pts(v.skew25) : '-'} sub="call − put, vol pts"
-              tone={v.skew25 != null && v.skew25 < 0 ? 'text-neg' : 'text-pos'} />
-            <Tile label="Forward factor 30-60d" value={v.forward_factor.value != null ? pctSigned(v.forward_factor.value) : '-'}
-              sub={v.forward_factor.forward != null ? `forward ${ivFmt(v.forward_factor.forward)}` : undefined} />
-            <Tile label="Put / call premium" value={v.flow.call_premium ? (v.flow.put_premium / v.flow.call_premium).toFixed(2) : '-'}
-              sub={`${usd(v.flow.put_premium)} / ${usd(v.flow.call_premium)}`} />
           </div>
+
+          <Sessions v={v} />
 
           <Flow v={v} />
 

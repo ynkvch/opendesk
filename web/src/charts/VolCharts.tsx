@@ -183,14 +183,14 @@ export function SeriesChart({ series, levels = [], format, zeroFill = false, tim
           {geo.ticks.map((v) => (
             <g key={v}>
               {v === 0 && <line x1={PAD.left} x2={w - PAD.right} y1={geo.sy(v)} y2={geo.sy(v)} stroke="rgb(255 255 255 / 0.22)" />}
-              <text x={PAD.left - 10} y={geo.sy(v)} dy="0.32em" textAnchor="end" className="num fill-ink-3 font-mono text-[11px]">{format(v)}</text>
+              <text x={PAD.left - 10} y={geo.sy(v)} dy="0.32em" textAnchor="end" className="num fill-ink-3 text-[11px]">{format(v)}</text>
             </g>
           ))}
           <line x1={PAD.left} x2={PAD.left} y1={PAD.top} y2={h - PAD.bottom} stroke="rgb(255 255 255 / 0.14)" />
           <line x1={PAD.left} x2={w - PAD.right} y1={h - PAD.bottom} y2={h - PAD.bottom} stroke="rgb(255 255 255 / 0.14)" />
           {geo.xticks.map((x, i) => (
             <text key={x} x={geo.sx(x)} y={h - 9} textAnchor={i === 0 ? 'start' : i === geo.xticks.length - 1 ? 'end' : 'middle'}
-              className="num fill-ink-3 font-mono text-[11px]">{geo.label(x)}</text>
+              className="num fill-ink-3 text-[11px]">{geo.label(x)}</text>
           ))}
           {geo.fill.map((f, i) => (
             <path key={i} d={f.d} fill={f.neg ? 'rgb(229 100 92 / 0.16)' : 'rgb(79 191 130 / 0.14)'} />
@@ -271,12 +271,12 @@ export function CurveChart({ series, categories, xFormat = String, format, ariaL
           onMouseLeave={() => setHover(null)}>
           {geo.ticks.map((v) => (
             <g key={v}>
-              <text x={PAD.left - 10} y={geo.sy(v)} dy="0.32em" textAnchor="end" className="num fill-ink-3 font-mono text-[11px]">{format(v)}</text>
+              <text x={PAD.left - 10} y={geo.sy(v)} dy="0.32em" textAnchor="end" className="num fill-ink-3 text-[11px]">{format(v)}</text>
             </g>
           ))}
           {geo.xticks.map((x) => (
             <g key={x}>
-              <text x={geo.sx(x)} y={h - 9} textAnchor="middle" className="num fill-ink-3 font-mono text-[11px]">
+              <text x={geo.sx(x)} y={h - 9} textAnchor="middle" className="num fill-ink-3 text-[11px]">
                 {categories ? categories[x] : xFormat(x)}
               </text>
             </g>
@@ -349,7 +349,7 @@ export function FlowBars({ rows, spot, format, ariaLabel }: {
           onMouseLeave={() => setHover(null)}>
           <line x1={geo.mid} x2={geo.mid} y1={pad.top} y2={h - pad.bottom} stroke="rgb(255 255 255 / 0.22)" />
           {[...geo.ticks.map((v) => -v), 0, ...geo.ticks].map((v) => (
-            <text key={v} x={geo.mid + (v < 0 ? -geo.sx(-v) : geo.sx(v))} y={h - 9} textAnchor="middle" className="num fill-ink-3 font-mono text-[11px]">
+            <text key={v} x={geo.mid + (v < 0 ? -geo.sx(-v) : geo.sx(v))} y={h - 9} textAnchor="middle" className="num fill-ink-3 text-[11px]">
               {format(Math.abs(v))}
             </text>
           ))}
@@ -361,7 +361,7 @@ export function FlowBars({ rows, spot, format, ariaLabel }: {
                 {row.calls > 0 && <rect x={geo.mid} y={y} width={geo.sx(row.calls)} height={bh} fill="var(--color-pos)" opacity={0.8} />}
                 {row.puts > 0 && <rect x={geo.mid - geo.sx(row.puts)} y={y} width={geo.sx(row.puts)} height={bh} fill="var(--color-neg)" opacity={0.8} />}
                 {i % geo.every === 0 && (
-                  <text x={pad.left - 10} y={geo.sy(i)} dy="0.32em" textAnchor="end" className="num fill-ink-3 font-mono text-[11px]">{row.strike}</text>
+                  <text x={pad.left - 10} y={geo.sy(i)} dy="0.32em" textAnchor="end" className="num fill-ink-3 text-[11px]">{row.strike}</text>
                 )}
               </g>
             )
@@ -385,15 +385,17 @@ export function FlowBars({ rows, spot, format, ariaLabel }: {
 }
 
 /**
- * past sessions, one point per 30 minutes: call flow as a green line, put flow as a red line (each averaged with the
- * half-hours either side and drawn as a smooth curve), the share price as a white line on its own axis, sessions
+ * past sessions, one point per bar (5, 15 or 30 minutes): call flow as a green line, put flow as a red line (each a
+ * moving average over `span` bars within the session, drawn as a smooth curve), the share price as a white line on its own axis, sessions
  * split by faint rules. nights and weekends are left out so the sessions sit
  * side by side.
  */
-export function SessionFlowChart({ bars, format, priceFormat, ariaLabel }: {
+export function SessionFlowChart({ bars, format, priceFormat, span = 3, ariaLabel }: {
   bars: { time: string; day: string; calls: number; puts: number; price: number }[]
   format: (v: number) => string
   priceFormat: (v: number) => string
+  /** how many bars each point averages, centred, within its session */
+  span?: number
   ariaLabel: string
 }) {
   const [ref, { w, h }] = useSize<HTMLDivElement>()
@@ -403,10 +405,10 @@ export function SessionFlowChart({ bars, format, priceFormat, ariaLabel }: {
 
   const geo = useMemo(() => {
     if (!w || !h || bars.length < 2) return null
-    // each line is the average of a half-hour and its neighbours in the same session, so single spikes don't
-    // dominate; the tooltip still shows the raw half-hour
-    const calls = smoothWithin(bars, (b) => b.calls, (b) => b.day)
-    const puts = smoothWithin(bars, (b) => b.puts, (b) => b.day)
+    // each line is a moving average over `span` bars in the same session, so single spikes don't dominate; the
+    // tooltip still shows the raw bar
+    const calls = smoothWithin(bars, (b) => b.calls, (b) => b.day, span)
+    const puts = smoothWithin(bars, (b) => b.puts, (b) => b.day, span)
     const y = yScale([...calls, ...puts], h, [0])
     const prices = bars.map((b) => b.price)
     let lo = Math.min(...prices)
@@ -416,7 +418,7 @@ export function SessionFlowChart({ bars, format, priceFormat, ariaLabel }: {
     hi += m
     const py = linear(lo, hi, h - PAD.bottom, PAD.top)
     const pticks = niceTicks(lo, hi, 5).filter((v) => v >= lo && v <= hi)
-    // one slot per half-hour, the point in the middle of its slot
+    // one slot per bar, the point in the middle of its slot
     const step = (w - PAD.left - right) / bars.length
     const sx = (i: number) => PAD.left + step * (i + 0.5)
     const days: { day: string; from: number; to: number }[] = []
@@ -427,7 +429,7 @@ export function SessionFlowChart({ bars, format, priceFormat, ariaLabel }: {
     })
     return { ...y, py, pticks, step, sx, days, calls: monotonePath(calls.map((v, i) => [sx(i), y.sy(v)])), puts: monotonePath(puts.map((v, i) => [sx(i), y.sy(v)])),
       price: monotonePath(bars.map((b, i) => [sx(i), py(b.price)])), smooth: { calls, puts } }
-  }, [bars, w, h])
+  }, [bars, w, h, span])
 
   const b = hover != null ? bars[hover] : null
   const dayLabel = (d: string) => new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: '2-digit', month: 'short' }).format(new Date(`${d}T12:00:00Z`))
@@ -441,17 +443,17 @@ export function SessionFlowChart({ bars, format, priceFormat, ariaLabel }: {
           }}
           onMouseLeave={() => setHover(null)}>
           {geo.ticks.map((v) => (
-            <text key={v} x={PAD.left - 10} y={geo.sy(v)} dy="0.32em" textAnchor="end" className="num fill-ink-3 font-mono text-[11px]">{format(v)}</text>
+            <text key={v} x={PAD.left - 10} y={geo.sy(v)} dy="0.32em" textAnchor="end" className="num fill-ink-3 text-[11px]">{format(v)}</text>
           ))}
           {geo.pticks.map((v) => (
-            <text key={`p${v}`} x={w - right + 10} y={geo.py(v)} dy="0.32em" className="num fill-ink-2 font-mono text-[11px]">{priceFormat(v)}</text>
+            <text key={`p${v}`} x={w - right + 10} y={geo.py(v)} dy="0.32em" className="num fill-ink-2 text-[11px]">{priceFormat(v)}</text>
           ))}
           <line x1={PAD.left} x2={w - right} y1={h - PAD.bottom} y2={h - PAD.bottom} stroke="rgb(255 255 255 / 0.14)" />
           {geo.days.map((d, k) => (
             <g key={d.day}>
               {k > 0 && <line x1={geo.sx(d.from) - geo.step / 2} x2={geo.sx(d.from) - geo.step / 2} y1={PAD.top} y2={h - PAD.bottom}
                 stroke="rgb(255 255 255 / 0.08)" />}
-              <text x={(geo.sx(d.from) + geo.sx(d.to)) / 2} y={h - 9} textAnchor="middle" className="num fill-ink-3 font-mono text-[11px]">{dayLabel(d.day)}</text>
+              <text x={(geo.sx(d.from) + geo.sx(d.to)) / 2} y={h - 9} textAnchor="middle" className="num fill-ink-3 text-[11px]">{dayLabel(d.day)}</text>
             </g>
           ))}
           <path d={geo.calls} fill="none" stroke="var(--color-pos)" strokeWidth={1.6} strokeLinejoin="round" />
