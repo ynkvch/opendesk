@@ -2,8 +2,7 @@
 
 The first open-sourced derivatives desk. One app for an options trader's whole day: the journal, the book's
 risk, the macro regime, options flow and volatility. It runs on your own machine, reads your own broker
-account (Interactive Brokers today) and uses your own data keys. Nothing leaves your computer, and there is no
-subscription.
+account (Interactive Brokers today) and uses your own data keys. There is no subscription.
 
 ## What it does today
 
@@ -83,16 +82,13 @@ python3 -m server.sync_tws                # TWS sync now
 
 ## Keys
 
-`data/keys.json` (start from `keys.example.json`). For everything except the IBKR keys, an environment variable
-with the name in capitals, such as `FRED_API_KEY`, wins over the file.
+`data/keys.json` (start from `keys.example.json`). For the FRED key, the environment variable `FRED_API_KEY` wins
+over the file.
 
 | Key | Used by | Where to get it |
 |---|---|---|
 | `ibkr_flex_token`, `ibkr_flex_query_id` | Trade history | IBKR Client Portal, see above |
-| `fred_api_key` | Regime page, industry series | Free at fredaccount.stlouisfed.org > API Keys |
-| `sec_user_agent` | SEC filings | Your name and email, e.g. `Jane Doe jane@example.com` (an SEC requirement) |
-| `comtrade_key` | Exports by country | Free at comtradedeveloper.un.org |
-| `census_key`, `estat_app_id` | Spare, for US Census and Japan e-Stat | Optional |
+| `fred_api_key` | Regime page | Free at fredaccount.stlouisfed.org > API Keys |
 
 ## Pages
 
@@ -110,13 +106,15 @@ comes from FRED, the Treasury's daily yield curve, CBOE and ISM releases, collec
 Prices come from Yahoo Finance's chart API with no key; a page read that finds them over 15 minutes old fetches
 fresh ones in the background.
 
-**Flow (`/flow`).** Type a ticker and the page reads its option chain from TWS every minute while it's open.
-The strikes near the money are read every minute and the rest of the chain in rotation, so the premium totals
-reach every contract that traded within a few minutes; TWS's own whole-chain call and put count sits beside them
-as a check. Past sessions come from TWS's 30-minute trade bars for each contract, built in the background (the
-first build for a ticker takes several minutes, one contract at a time). TWS keeps no history of an option chain,
-so skew and forward-factor history is built from one snapshot a day, stored in `data/vol.db`. Needs TWS open with
-the API enabled, and options market data for the ticker. To try the page without TWS, run
+**Flow (`/flow`).** Type a ticker and the page reads its option chain from TWS every minute while it's open, and in
+market hours it keeps recording the last ticker opened whenever TWS is running. The strikes near the money are read
+every minute and the rest of the chain in rotation, so the premium totals reach every contract that traded within a
+few minutes. The flow chart uses TWS's 5-minute trade bars for each contract, today's and the last five sessions',
+with premium as each bar's volume × its average traded price × 100; it can also show 15 or 30 minutes. The bars
+come from IBKR's servers whenever TWS is open, so missed sessions are filled in later. A ticker's first build reads
+one contract at a time and takes several minutes. TWS keeps no history of an option chain, so skew and
+forward-factor history is built from one snapshot a day, stored in `data/vol.db`. Needs TWS open with the API
+enabled, and options market data for the ticker. To try the page without TWS, run
 `VOL_SOURCE=sim ./run.sh`: a made-up chain, kept in its own `data/vol_sim.db`.
 
 **Time value and theta.** For single-leg options the trade page shows extrinsic value at each session close,
@@ -136,26 +134,19 @@ theta per day, and a projection to expiry with the underlying and IV held where 
 | `server/greeks_at_entry.py` | Greeks at the moment of a fill: IBKR's model next to this project's Black-Scholes |
 | `server/bs.py` | Black-Scholes price, Greeks and implied vol |
 | `server/vol.py` | The Flow page: reads option chains from TWS, keeps snapshots, open interest and trade bars in `data/vol.db` |
-| `server/signals/` | Regime and sector collectors, plus SEC, FRED, USASpending and trade-data collectors (`run.py` runs them, `config.json` configures them) |
+| `server/signals/` | The Regime page's collector (`regime.py`, run by `run.py`) and the sector prices (`sectors.py`), with `config.json` for their settings |
 | `web/` | React + Vite + Tailwind UI |
 | `scripts/` | macOS launchd jobs for running things on a schedule |
 | `data/` | Your databases, logs and keys. Ignored by git |
 
-The SEC, industry and trade-data collectors in `server/signals/` work but no page shows them yet. Their sources
-are written up in [FILINGS_AND_DATA.md](FILINGS_AND_DATA.md).
-
-```bash
-python3 -m server.signals.run            # all sources now
-python3 -m server.signals.run sec        # some
-python3 -m server.signals.run --due      # only sources whose release window is open
-```
+Collect the regime readings by hand with `python3 -m server.signals.run`.
 
 ## Run it in the background (macOS)
 
 The files in `scripts/` are launchd jobs. Fill in this folder and your Python, then load one:
 
 ```bash
-job=com.opendesk.api   # or com.opendesk.journal, com.opendesk.regime, com.opendesk.signals
+job=com.opendesk.api   # or com.opendesk.journal, com.opendesk.regime
 sed -e "s|__OPENDESK__|$PWD|g" -e "s|__PYTHON__|$(command -v python3)|g" scripts/$job.plist > ~/Library/LaunchAgents/$job.plist
 launchctl load ~/Library/LaunchAgents/$job.plist
 ```
@@ -165,11 +156,9 @@ launchctl load ~/Library/LaunchAgents/$job.plist
 | `com.opendesk.api` | Keeps the API and the built UI (`cd web && npm run build`) up at http://localhost:8000 |
 | `com.opendesk.journal` | Every 15 minutes: Flex once a day, TWS during US trading hours if TWS is open |
 | `com.opendesk.regime` | Collects regime data every 15 minutes on weekdays |
-| `com.opendesk.signals` | Runs the other collectors when their release windows open |
 
 Output goes to `data/*.log`.
 
 ## Journal rules built in
 
 - Trades never get a generated thesis or post-mortem. Those fields are yours.
-- The thesis locks once a trade closes (UI and API). Later thoughts go in the post-mortem.
