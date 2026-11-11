@@ -11,12 +11,12 @@ Needs TWS running and logged in, with the API enabled (Global Configuration > AP
 Fills older than today are only returned if TWS's Trade Log is set to show 7 days.
 
 Run (from dashboard/):
-    python3 -m server.greeks_at_entry --symbol WULF
-    python3 -m server.greeks_at_entry --symbol WULF --date 2026-10-02 --port 7497   # paper
+    python3 -m server.greeks_at_entry --symbol XYZ
+    python3 -m server.greeks_at_entry --symbol XYZ --date 2026-01-15 --port 7497   # paper
 
 The API often won't return fills from earlier days. Then pass the fill from the TWS Trade Log;
 the contract is taken from your current position in that symbol:
-    python3 -m server.greeks_at_entry --symbol WULF --price 0.38 --qty 3 --time "2026-10-02T14:35:17+01:00"
+    python3 -m server.greeks_at_entry --symbol XYZ --price 1.25 --qty 2 --time "2026-01-15T10:30:00-05:00"
 """
 import argparse
 import sys
@@ -90,7 +90,7 @@ def main() -> None:
     ap.add_argument("--port", type=int, help="7496 live TWS, 7497 paper TWS (default: try all)")
     ap.add_argument("--price", type=float, help="Manual fill: price per share, from the Trade Log")
     ap.add_argument("--qty", type=float, help="Manual fill: contracts")
-    ap.add_argument("--time", help="Manual fill: ISO time with offset, e.g. 2026-10-02T14:35:17+01:00")
+    ap.add_argument("--time", help="Manual fill: ISO time with offset, e.g. 2026-01-15T10:30:00-05:00")
     args = ap.parse_args()
 
     ib = connect(args.port)

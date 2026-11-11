@@ -13,8 +13,8 @@ are added once with --add-fill; the contract comes from your open position.
 
 Run (from dashboard/):
     python3 -m server.sync_tws
-    python3 -m server.sync_tws --add-fill WULF --price 0.38 --qty 3 --commission 2.07 \
-        --time "2026-10-02T14:35:17+01:00"
+    python3 -m server.sync_tws --add-fill XYZ --price 1.25 --qty 2 --commission 1.30 \
+        --time "2026-01-15T10:30:00-05:00"
 """
 import argparse
 import sys
