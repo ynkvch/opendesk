@@ -16,10 +16,12 @@ from . import bs
 from .db import connect
 from .signals.routes import router as signals_router
 from .signals.store import DB_PATH as SIGNALS_DB
+from .vol import router as vol_router
 
 NY = ZoneInfo("America/New_York")
 app = FastAPI(title="opendesk")
 app.include_router(signals_router)
+app.include_router(vol_router)
 DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
 

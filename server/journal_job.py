@@ -5,6 +5,7 @@
   - TWS: every run from 04:00 to 20:00 New York, the full pre- and post-market (outside the options session it saves
     IBKR's model P&L),
     only if TWS is open with the API on port 7496. Otherwise skipped quietly.
+  - Volatility: once a day from 15:45 New York, a snapshot of every ticker on the Flow tab's watchlist (TWS).
 
 Run by hand to see what it would do:
     python3 -m server.journal_job
@@ -83,6 +84,23 @@ def main() -> None:
             log(f"TWS sync failed: {e}")
         except Exception:
             log("TWS sync failed:\n" + traceback.format_exc())
+
+    # volatility snapshots for the watchlist, once a day near the close, so skew and forward factor history grows
+    # even on days the volatility tab isn't opened
+    ny_day = now_ny.date().isoformat()
+    near_close = now_ny.weekday() < 5 and time(15, 45) <= now_ny.time() <= time(20, 0)
+    if near_close and state.get("vol_day") != ny_day and tws_open():
+        try:
+            import asyncio
+            from .vol import collect, watchlist
+            done = []
+            for w in watchlist():
+                asyncio.run(collect(w["symbol"]))
+                done.append(w["symbol"])
+            log(f"Vol snapshots: {', '.join(done) or 'watchlist empty'}")
+            state["vol_day"] = ny_day
+        except Exception:
+            log("Vol snapshots failed:\n" + traceback.format_exc())
 
     STATE.write_text(json.dumps(state, indent=2))
 

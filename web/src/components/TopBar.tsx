@@ -7,6 +7,7 @@ const LINKS = [
   { href: '/', label: 'Dashboard' },
   { href: '/journal', label: 'Journal' },
   { href: '/regime', label: 'Regime' },
+  { href: '/flow', label: 'Flow' },
 ]
 
 export function TopBar({ path, asOf, source }: { path: string; asOf: string | null; source: string | null }) {

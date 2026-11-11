@@ -1,7 +1,7 @@
 # opendesk
 
 The first open-sourced derivatives desk. One app for an options trader's whole day: the journal, the book's
-risk, the macro regime and, soon, flow and volatility. It runs on your own machine, reads your own broker
+risk, the macro regime, options flow and volatility. It runs on your own machine, reads your own broker
 account (Interactive Brokers today) and uses your own data keys. Nothing leaves your computer, and there is no
 subscription.
 
@@ -15,6 +15,10 @@ subscription.
 - **Macro regime.** Six signals (yield curve, credit spreads, Fed balance sheet and Treasury cash, ISM, VIX),
   each read with its own rule, routed to the sectors and options approach each regime favours.
 - **Sector rotation.** The 11 sector ETFs on a relative rotation graph against SPY or QQQ.
+- **Flow and volatility.** Any ticker's option chain from TWS, read every minute: call and put premium today
+  across the whole chain, flow by strike, the last five sessions of flow against the share price, the most traded
+  contracts, then implied against realized vol, skew at 30/60/90 days, the term structure and the 30-60 day
+  forward factor.
 
 ## Planned
 
@@ -22,10 +26,10 @@ opendesk is early. These are next, in roughly this order:
 
 - **In-depth risk management.** Book-level Greeks across every open position, scenario and stress tests (spot,
   vol and time shocks), risk limits and position sizing, and alerts when the book drifts outside them.
-- **Options flow.** Screening for unusual activity: large and sweep orders, volume against open interest, and
-  where the premium is going, filtered to your watchlist.
-- **Volatility analytics.** IV surfaces, term structure and skew, IV rank and percentile, and realized against
-  implied volatility, for any underlying.
+- **Options flow screening.** Unusual activity across a watchlist rather than one ticker at a time: large and
+  sweep orders, volume against open interest, and alerts when premium piles into one side.
+- **Deeper volatility analytics.** Full IV surfaces, expected moves and earnings moves, the volatility cone,
+  risk reversals and butterflies, spot-vol beta, and dealer gamma exposure.
 - **Customisable regime.** Choose your own indicators, rules and weights for the regime score.
 - **More brokers and data sources,** each connected with your own API keys.
 
@@ -46,6 +50,9 @@ Trades are priced with Black-Scholes on real daily prices (`server/demo_data.jso
 up. A "Demo data" badge shows in the top bar while you are looking at it.
 
 Rebuild the demo at any time with `python3 -m server.demo`.
+
+The Flow tab reads live option chains from TWS. To see it without TWS, start with `VOL_SOURCE=sim ./run.sh`
+instead, which feeds it a made-up chain.
 
 Requirements: Python 3.11+, Node 20+.
 
@@ -103,6 +110,15 @@ comes from FRED, the Treasury's daily yield curve, CBOE and ISM releases, collec
 Prices come from Yahoo Finance's chart API with no key; a page read that finds them over 15 minutes old fetches
 fresh ones in the background.
 
+**Flow (`/flow`).** Type a ticker and the page reads its option chain from TWS every minute while it's open.
+The strikes near the money are read every minute and the rest of the chain in rotation, so the premium totals
+reach every contract that traded within a few minutes; TWS's own whole-chain call and put count sits beside them
+as a check. Past sessions come from TWS's 30-minute trade bars for each contract, built in the background (the
+first build for a ticker takes several minutes, one contract at a time). TWS keeps no history of an option chain,
+so skew and forward-factor history is built from one snapshot a day, stored in `data/vol.db`. Needs TWS open with
+the API enabled, and options market data for the ticker. To try the page without TWS, run
+`VOL_SOURCE=sim ./run.sh`: a made-up chain, kept in its own `data/vol_sim.db`.
+
 **Time value and theta.** For single-leg options the trade page shows extrinsic value at each session close,
 theta per day, and a projection to expiry with the underlying and IV held where they closed.
 
@@ -119,6 +135,7 @@ theta per day, and a projection to expiry with the underlying and IV held where 
 | `server/journal_job.py` | Scheduled run of Flex and TWS |
 | `server/greeks_at_entry.py` | Greeks at the moment of a fill: IBKR's model next to this project's Black-Scholes |
 | `server/bs.py` | Black-Scholes price, Greeks and implied vol |
+| `server/vol.py` | The Flow page: reads option chains from TWS, keeps snapshots, open interest and trade bars in `data/vol.db` |
 | `server/signals/` | Regime and sector collectors, plus SEC, FRED, USASpending and trade-data collectors (`run.py` runs them, `config.json` configures them) |
 | `web/` | React + Vite + Tailwind UI |
 | `scripts/` | macOS launchd jobs for running things on a schedule |
