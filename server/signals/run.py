@@ -1,8 +1,7 @@
-"""Collect data and raise flags.
+"""collect the regime page's readings.
 
-    python3 -m server.signals.run                 # every source, now
-    python3 -m server.signals.run sec trade       # just these
-    python3 -m server.signals.run --due           # only sources inside their release window (for launchd)
+    python3 -m server.signals.run            # now
+    python3 -m server.signals.run --due      # only inside its schedule window (for launchd)
 """
 import argparse
 import fcntl
@@ -10,10 +9,10 @@ import sys
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import activity, deals_ai, flags, fred, regime, sec, trade, usaspending
+from . import regime
 from .store import DB_PATH, MissingKey, connect, load_config, load_keys, now
 
-SOURCES = {"sec": sec, "trade": trade, "fred": fred, "usaspending": usaspending, "regime": regime}
+SOURCES = {"regime": regime}
 
 
 def is_due(conn, name: str, rule: dict, at: datetime) -> bool:
@@ -38,20 +37,10 @@ def run_source(conn, name: str, cfg: dict, keys: dict) -> str:
     try:
         res = SOURCES[name].collect(conn, cfg, keys)
         rows = res["rows"]
-        raised = 0
-        if name == "sec":
-            raised = flags.filing_flags(conn, cfg, res.get("filings", []))
-            checked = deals_ai.check(conn, cfg, activity.agreement_rows(conn, cfg), res.setdefault("errors", []))
-            if checked:
-                res["errors"].insert(0, f"Claude checked {checked} agreements")
-        elif name == "usaspending":
-            raised = flags.award_flags(conn, cfg, res.get("awards", []))
-        elif name == "regime":
-            raised = len(res["changes"])
-            res["errors"] = res["changes"] + res["errors"]
-        else:
-            raised = flags.series_flags(conn, cfg, name)
-        msg = f"{rows} new, {raised} flags"
+        # a changed reading is reported first, then any part that failed
+        raised = len(res["changes"])
+        res["errors"] = res["changes"] + res["errors"]
+        msg = f"{rows} new, {raised} changed"
         if res.get("errors"):
             msg += "; " + "; ".join(res["errors"][:5])
     except MissingKey as e:
