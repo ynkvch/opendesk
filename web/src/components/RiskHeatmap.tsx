@@ -10,15 +10,25 @@ const VOL_STEPS = [20, 15, 10, 5, 0, -5, -10, -15, -20]
 /**
  * Risk navigator: position P&L (against what was paid) for each change in the underlying (columns) and in implied
  * vol (rows), on a chosen day up to expiry. Black-Scholes, every leg's vol shifted by the same number of points.
+ * open trades start today against today's account; closed ones start on the entry day, at the entry price and vol,
+ * against the account on that day (`from` and `account`).
  */
-export function RiskHeatmap({ position, spot, underlying }: { position: Position; spot: number; underlying: string }) {
-  const [nlv, setNlv] = useState<number | null>(null)
+export function RiskHeatmap({ position, spot, underlying, from, account }: {
+  position: Position
+  spot: number
+  underlying: string
+  from?: string
+  account?: number | null
+}) {
+  const [latest, setLatest] = useState<number | null>(null)
   useEffect(() => {
-    api.account().then((a) => setNlv(a.at(-1)?.net_liquidation ?? null)).catch(() => setNlv(null))
-  }, [])
+    if (account !== undefined) return
+    api.account().then((a) => setLatest(a.at(-1)?.net_liquidation ?? null)).catch(() => setLatest(null))
+  }, [account])
+  const nlv = account !== undefined ? account : latest
 
   const expiry = Math.min(...position.legs.filter((l) => l.right !== 'S').map((l) => new Date(`${l.expiry}T20:00:00Z`).getTime()))
-  const today = new Date()
+  const today = from ? new Date(from) : new Date()
   today.setUTCHours(20, 0, 0, 0)  // value at each day's close
   const maxDay = Math.max(0, Math.round((expiry - today.getTime()) / DAY_MS))
   const [day, setDay] = useState(0)
@@ -77,7 +87,7 @@ export function RiskHeatmap({ position, spot, underlying }: { position: Position
       </div>
       <p className="mt-2 min-h-4 text-xs text-ink-2">{hover ?? 'Hover a cell for its share of the account.'}</p>
       <p className="mt-1 text-xs text-ink-3">
-        P&L against what you paid, after commissions. Columns: {underlying} from {spot.toFixed(2)} in 2% steps. Rows: implied vol
+        P&L against what you paid, after commissions. Columns: {underlying} from {spot.toFixed(2)}{from ? ' at entry' : ''} in 2% steps. Rows: implied vol
         shifted by the same number of points on every leg. Black-Scholes, valued at each day's close.
       </p>
     </div>

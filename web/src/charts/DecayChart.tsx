@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { ThetaClose, ThetaDay } from '../lib/api'
-import { date, money, num, vol } from '../lib/format'
+import { date, dateTime, money, num, vol } from '../lib/format'
 import { linear, niceTicks, useWidth } from './util'
 
 type Props = {
@@ -8,6 +8,8 @@ type Props = {
   projection: ThetaDay[]
   /** vertical reference lines; their meaning is explained outside the chart */
   markers?: { date: string; color: string }[]
+  /** readings each hour (three days or less to expiry) instead of each close */
+  hourly?: boolean
   ariaLabel: string
 }
 
@@ -33,26 +35,58 @@ const DAY_MS = 86_400_000
  * Top: extrinsic value of the position at each session close (solid), then projected to expiry
  * with the underlying and IV held at the last close (dashed). Bottom: dollars theta takes per day.
  */
-export function DecayChart({ history, projection, markers = [], ariaLabel }: Props) {
+export function DecayChart({ history, projection, markers = [], hourly = false, ariaLabel }: Props) {
+  const label = hourly ? dateTime : date
+  const per = hourly ? 'hour' : 'day'
   const [ref, width] = useWidth<HTMLDivElement>()
   const [hover, setHover] = useState<number | null>(null)
 
+  const t0 = new Date(history[0]?.date ?? projection[0]?.date).getTime()
   const days = useMemo<Day[]>(() => {
-    const t0 = new Date(history[0]?.date ?? projection[0]?.date).getTime()
     const x = (d: string) => (new Date(d).getTime() - t0) / DAY_MS
     return [
       ...history.map((h) => ({ date: h.date, x: x(h.date), extrinsic: h.extrinsic, eaten: h.theta == null ? null : -h.theta, actual: true, close: h })),
       ...projection.map((p) => ({ date: p.date, x: x(p.date), extrinsic: p.extrinsic, eaten: p.decay, actual: false })),
     ]
-  }, [history, projection])
+  }, [history, projection, t0])
+
+  // the bars: one per point (daily), or one per clock hour (hourly) so every bar is an hour and the same width.
+  // an hour up to the last reading takes the theta of the latest reading in it; a later hour, the projected decay
+  // ending at that hour (scaled to a full hour when the step was shorter)
+  const bars = useMemo(() => {
+    if (!hourly) return days.map((d, i) => ({ x: d.x, eaten: d.eaten, actual: d.actual, from: i, to: i }))
+    const HOUR = 1 / 24
+    const split = history.length
+    const lastActual = split ? days[split - 1].x : -Infinity
+    const first = Math.floor((t0 + (days[0]?.x ?? 0) * DAY_MS) / 3_600_000) * 3_600_000
+    const end = days[days.length - 1]?.x ?? 0
+    const out: { x: number; eaten: number | null; actual: boolean; from: number; to: number }[] = []
+    for (let s = (first - t0) / DAY_MS; s < end - 1e-9; s += HOUR) {
+      const e = s + HOUR
+      const inSlot = days.map((d, i) => [d, i] as const).filter(([d]) => d.x > s - 1e-9 && d.x < e - 1e-9)
+      if (s <= lastActual) {
+        const latest = days.slice(0, split).filter((d) => d.x < e - 1e-9 && d.eaten != null).at(-1)
+        out.push({ x: s + HOUR / 2, eaten: latest?.eaten ?? null, actual: true, from: inSlot[0]?.[1] ?? -1, to: inSlot.at(-1)?.[1] ?? -1 })
+      } else {
+        const j = days.findIndex((d, i) => i >= split && d.x > s + 1e-9 && d.x <= e + 1e-9)
+        if (j < 0) continue
+        const prevX = j > 0 ? days[j - 1].x : s
+        const covered = Math.min(1, (days[j].x - Math.max(prevX, s)) / HOUR) || 1
+        out.push({ x: s + HOUR / 2, eaten: (days[j].eaten ?? 0) / covered, actual: false, from: j, to: j })
+      }
+    }
+    return out
+  }, [hourly, days, history.length, t0])
 
   const geo = useMemo(() => {
     if (!width || days.length < 2) return null
     const xs = days.map((d) => d.x)
-    const sx = linear(xs[0], xs[xs.length - 1], PAD.left, width - PAD.right)
+    // hourly bars sit on clock hours, which can start before the first reading
+    const x0 = hourly && bars.length ? Math.min(xs[0], bars[0].x - 1 / 48) : xs[0]
+    const sx = linear(x0, xs[xs.length - 1], PAD.left, width - PAD.right)
     const ext = niceTicks(Math.min(0, ...days.map((d) => d.extrinsic)), Math.max(...days.map((d) => d.extrinsic)), 4)
     const sy = linear(ext[0], ext[ext.length - 1], PAD.top + TOP_H, PAD.top)
-    const eaten = niceTicks(0, Math.max(...days.map((d) => d.eaten ?? 0)), 2)
+    const eaten = niceTicks(0, Math.max(...bars.map((b) => b.eaten ?? 0)), 2)
     const barTop = PAD.top + TOP_H + GAP
     const sb = linear(0, eaten[eaten.length - 1], barTop + BAR_H, barTop)
     const path = (ds: Day[]) => ds.map((d, i) => `${i ? 'L' : 'M'}${sx(d.x).toFixed(1)},${sy(d.extrinsic).toFixed(1)}`).join('')
@@ -63,12 +97,16 @@ export function DecayChart({ history, projection, markers = [], ariaLabel }: Pro
     const zero = sy(Math.max(0, ext[0]))
     const area = past.length > 1
       ? `${path(past)}L${sx(past[past.length - 1].x).toFixed(1)},${zero}L${sx(past[0].x).toFixed(1)},${zero}Z` : ''
-    const step = days.length > 1 ? (sx(days[days.length - 1].x) - sx(days[0].x)) / (days[days.length - 1].x - days[0].x) : 10
-    const barW = Math.max(2, Math.min(16, step * 0.6))
+    // one width for every bar: 60% of the spacing (an hour, or the typical gap between closes)
+    const gaps = bars.slice(1).map((b, i) => sx(b.x) - sx(bars[i].x)).filter((g) => g > 0).sort((a, b) => a - b)
+    const barW = Math.max(1.5, Math.min(16, (gaps.length ? gaps[Math.floor(gaps.length / 2)] : 16) * 0.6))
     const nl = Math.max(2, Math.min(6, Math.floor((width - PAD.left) / 90)))
-    const xl = Array.from({ length: nl }, (_, k) => Math.round((k * (days.length - 1)) / (nl - 1)))
+    // labels evenly spaced in time, each on the nearest point
+    const span = xs[xs.length - 1] - xs[0]
+    const nearest = (x: number) => xs.reduce((best, v, i) => (Math.abs(v - x) < Math.abs(xs[best] - x) ? i : best), 0)
+    const xl = [...new Set(Array.from({ length: nl }, (_, k) => nearest(xs[0] + (k * span) / (nl - 1))))]
     return { sx, sy, sb, ext, eaten, barTop, past: path(past), future: split < days.length ? path(future) : '', area, barW, xl, split }
-  }, [width, days, history.length])
+  }, [width, days, bars, hourly, history.length])
 
   function onMove(e: React.PointerEvent<SVGRectElement>) {
     if (!geo) return
@@ -92,7 +130,7 @@ export function DecayChart({ history, projection, markers = [], ariaLabel }: Pro
               <text x={PAD.left - 10} y={geo.sy(t)} dy="0.32em" textAnchor="end" className="num fill-ink-3 text-[11px]">{money(t)}</text>
             </g>
           ))}
-          <text x={PAD.left} y={geo.barTop - 10} className="fill-ink-3 text-[11px]">Taken by theta per day</text>
+          <text x={PAD.left} y={geo.barTop - 10} className="fill-ink-3 text-[11px]">Taken by theta per {per}</text>
           {geo.eaten.map((t) => (
             <g key={`b${t}`}>
               <line x1={PAD.left} x2={width - PAD.right} y1={geo.sb(t)} y2={geo.sb(t)}
@@ -117,16 +155,16 @@ export function DecayChart({ history, projection, markers = [], ariaLabel }: Pro
             )
           })}
 
-          {days.map((d, i) => d.eaten != null && d.eaten > 0 && (
-            <rect key={d.date} x={geo.sx(d.x) - geo.barW / 2} y={geo.sb(d.eaten)} width={geo.barW}
-              height={Math.max(0, geo.barTop + BAR_H - geo.sb(d.eaten))} rx={1.5}
-              fill="var(--color-neg)" fillOpacity={hover === i ? 1 : d.actual ? 0.8 : 0.35} />
+          {bars.map((b, k) => b.eaten != null && b.eaten > 0 && (
+            <rect key={k} x={geo.sx(b.x) - geo.barW / 2} y={geo.sb(b.eaten)} width={geo.barW}
+              height={Math.max(0, geo.barTop + BAR_H - geo.sb(b.eaten))} rx={1.5}
+              fill="var(--color-neg)" fillOpacity={hover != null && hover >= b.from && hover <= b.to ? 1 : b.actual ? 0.8 : 0.35} />
           ))}
 
           {geo.xl.map((i) => (
             <text key={i} x={geo.sx(days[i].x)} y={HEIGHT - 6}
               textAnchor={i === 0 ? 'start' : i === days.length - 1 ? 'end' : 'middle'}
-              className="num fill-ink-3 text-[11px]">{date(days[i].date)}</text>
+              className="num fill-ink-3 text-[11px]">{label(days[i].date)}</text>
           ))}
 
           {hover != null && (
@@ -142,10 +180,10 @@ export function DecayChart({ history, projection, markers = [], ariaLabel }: Pro
       {geo && h && (
         <div className="pointer-events-none absolute top-0 z-10 min-w-44 rounded-[var(--radius-sm)] border border-line-strong bg-surface-3/95 px-3 py-2 text-xs shadow-[0_8px_24px_rgb(0_0_0/0.4)] backdrop-blur"
           style={{ left: geo.sx(h.x) + 12 > width - 200 ? geo.sx(h.x) - 202 : geo.sx(h.x) + 12 }}>
-          <div className="text-ink">{date(h.date)} <span className="text-ink-3">{h.actual ? 'close' : 'projected'}</span></div>
+          <div className="text-ink">{label(h.date)} <span className="text-ink-3">{h.actual ? (hourly ? 'reading' : 'close') : 'projected'}</span></div>
           <dl className="num mt-1.5 grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5">
             <dt className="text-ink-3">Extrinsic</dt><dd className="text-right text-ink">{money(h.extrinsic, 2)}</dd>
-            <dt className="text-ink-3">Theta</dt><dd className="text-right text-neg">{h.eaten == null ? '-' : `${money(-h.eaten, 2)}/day`}</dd>
+            <dt className="text-ink-3">Theta</dt><dd className="text-right text-neg">{h.eaten == null ? '-' : `${money(-h.eaten, 2)}/${per}`}</dd>
             {h.close && <>
               <dt className="text-ink-3">Underlying</dt><dd className="text-right text-ink-2">{num(h.close.underlying)}</dd>
               <dt className="text-ink-3">Option</dt><dd className="text-right text-ink-2">{num(h.close.option)}</dd>
@@ -156,7 +194,7 @@ export function DecayChart({ history, projection, markers = [], ariaLabel }: Pro
               <dd className="text-right text-ink-2">{money(h.extrinsic - prevActual.extrinsic, 2)}</dd>
             </>}
           </dl>
-          {prevActual && <p className="mt-1.5 max-w-44 text-[11px] text-ink-3">Change since the previous close includes moves in price and IV, not only theta.</p>}
+          {prevActual && <p className="mt-1.5 max-w-44 text-[11px] text-ink-3">Change since the previous {hourly ? 'reading' : 'close'} includes moves in price and IV, not only theta.</p>}
         </div>
       )}
     </div>

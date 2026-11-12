@@ -60,11 +60,9 @@ body {
 .num {
   font-variant-numeric: tabular-nums;
 }
-/* Contract codes and execution IDs. */
+/* contract codes and execution ids: the page font with lined-up digits, like every other number */
 .code {
-  font-family: var(--font-mono);
-  font-size: 0.92em;
-  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
 }
 
 /*

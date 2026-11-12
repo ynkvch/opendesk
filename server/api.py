@@ -164,6 +164,10 @@ def get_trade(trade_id: int) -> dict:
     }
 
 
+def _utc(iso: str) -> datetime:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+
 def _session_close(d: date) -> datetime:
     return datetime.combine(d, time(16), NY)
 
@@ -191,30 +195,56 @@ def theta(trade_id: int) -> dict:
     def intrinsic(s: float) -> float:
         return max(0.0, s - k) if right == "C" else max(0.0, k - s)
 
+    def point(when: str, at: datetime, und: float, opt: float, per: float) -> dict:
+        ty = years(at)
+        iv = bs.implied_vol(right, opt, und, k, ty) if ty > 0 else None
+        return {
+            "date": when, "underlying": und, "option": opt, "iv": iv,
+            "extrinsic": (opt - intrinsic(und)) * mult,
+            "theta": bs.greeks(right, und, k, ty, iv)["theta"] * mult / per if iv else None,
+        }
+
+    # three days or less to expiry (from the close, or from now while the trade is open): hour by hour
+    ref = _utc(t["closed_at"]) if t["closed_at"] else datetime.now(NY)
+    hourly = (expiry.date() - ref.astimezone(NY).date()).days <= 3
+
     history = []
-    for r in _rows("SELECT date, underlying, option FROM option_daily WHERE trade_id = ? ORDER BY date", (trade_id,)):
-        ty = years(_session_close(date.fromisoformat(r["date"])))
-        iv = bs.implied_vol(right, r["option"], r["underlying"], k, ty) if ty > 0 else None
-        history.append({
-            "date": r["date"], "underlying": r["underlying"], "option": r["option"], "iv": iv,
-            "extrinsic": (r["option"] - intrinsic(r["underlying"])) * mult,
-            "theta": bs.greeks(right, r["underlying"], k, ty, iv)["theta"] * mult if iv else None,
-        })
+    if hourly:
+        # the entry, then the hourly marks: the option's price follows from the mark's p&l
+        if t["und_entry"]:
+            history.append(point(t["opened_at"], _utc(t["opened_at"]), t["und_entry"], t["entry_price"], 24))
+        for m in _rows("SELECT time, underlying, pnl FROM marks WHERE trade_id = ? ORDER BY time", (trade_id,)):
+            history.append(point(m["time"], _utc(m["time"]), m["underlying"], t["entry_price"] + m["pnl"] / mult, 24))
+    else:
+        for r in _rows("SELECT date, underlying, option FROM option_daily WHERE trade_id = ? ORDER BY date", (trade_id,)):
+            history.append(point(r["date"], _session_close(date.fromisoformat(r["date"])), r["underlying"], r["option"], 1))
 
     projection = []
     last = next((h for h in reversed(history) if h["iv"]), None)
     if last:
         s, iv = last["underlying"], last["iv"]
-        d = date.fromisoformat(last["date"])
-        prev = bs.price(right, s, k, years(_session_close(d)), iv)
-        while d < expiry.date():
-            d += timedelta(days=1)
-            p = bs.price(right, s, k, years(_session_close(d)), iv)
-            projection.append({"date": d.isoformat(), "extrinsic": (p - intrinsic(s)) * mult, "decay": (prev - p) * mult})
-            prev = p
+        if hourly:
+            at = _utc(last["date"])
+            prev = bs.price(right, s, k, years(at), iv)
+            at = at.replace(minute=0, second=0, microsecond=0)
+            while at < expiry:
+                at = min(at + timedelta(hours=1), expiry)
+                p = bs.price(right, s, k, years(at), iv)
+                projection.append({"date": at.astimezone(NY).isoformat(), "extrinsic": (p - intrinsic(s)) * mult,
+                                   "decay": (prev - p) * mult})
+                prev = p
+        else:
+            d = date.fromisoformat(last["date"])
+            prev = bs.price(right, s, k, years(_session_close(d)), iv)
+            while d < expiry.date():
+                d += timedelta(days=1)
+                p = bs.price(right, s, k, years(_session_close(d)), iv)
+                projection.append({"date": d.isoformat(), "extrinsic": (p - intrinsic(s)) * mult, "decay": (prev - p) * mult})
+                prev = p
 
     return {
         "available": True,
+        "step": "hour" if hourly else "day",
         "expiry": leg["expiry"],
         "strike": k,
         "right": right,
@@ -383,6 +413,8 @@ def summary(since: str | None = None) -> dict:
     that day and the account values from it on."""
     start = _start()
     closed = _rows("SELECT * FROM trades WHERE status = 'closed' AND opened_at > ?", (start,))
+    if since:
+        closed = [t for t in closed if t["closed_at"] and t["closed_at"][:10] > since]
     open_n = _rows("SELECT COUNT(*) n FROM trades WHERE status = 'open' AND opened_at > ?", (start,))[0]["n"]
     pnls = [t["realized_pnl"] for t in closed]
     wins = [p for p in pnls if p > 0]
@@ -455,5 +487,3 @@ if DIST.exists():
         # index.html names the current hashed bundle; without this header browsers reuse a cached copy after a
         # rebuild and keep loading the old UI. The hashed files under /assets can stay cached.
         return FileResponse(DIST / "index.html", headers={"Cache-Control": "no-cache"})
-    if since:
-        closed = [t for t in closed if t["closed_at"] and t["closed_at"][:10] > since]

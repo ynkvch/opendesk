@@ -8,14 +8,15 @@ account (Interactive Brokers today) and uses your own data keys. There is no sub
 
 - **Options journal.** Every trade from your fills, with P&L path, MAE/MFE, R multiple, fees, payoff at expiry
   and now, Greeks and IV at entry and exit, legs, executions, and a time value and theta panel for single-leg
-  options. You write the thesis and post-mortem; the app never does.
+  options. Each trade shows its risk against the account: the most it can lose and its Sharpe ratio over the holding
+  period, measured on 5-minute option prices from TWS. You write the thesis and post-mortem; the app never does.
 - **Account.** Net liquidation value against the same money in SPY, Sharpe ratio, max drawdown, beta and alpha
-  against SPY, profit factor, expectancy, and everything trading has cost you.
+  against SPY, profit factor, expectancy, and everything trading has cost you, for any range from a week to all time.
 - **Macro regime.** Six signals (yield curve, credit spreads, Fed balance sheet and Treasury cash, ISM, VIX),
   each read with its own rule, routed to the sectors and options approach each regime favours.
 - **Sector rotation.** The 11 sector ETFs on a relative rotation graph against SPY or QQQ.
 - **Flow and volatility.** Any ticker's option chain from TWS, read every minute: call and put premium today
-  across the whole chain, flow by strike, the last five sessions of flow against the share price, the most traded
+  across the whole chain, flow by strike with a zoomable strike range, the last five sessions of flow against the share price, the most traded
   contracts, then implied against realized vol, skew at 30/60/90 days, the term structure and the 30-60 day
   forward factor.
 
@@ -66,7 +67,7 @@ Everything personal lives in `data/`, which git ignores: the databases, logs and
 | Source | Gives | Needs |
 |---|---|---|
 | Flex | Every fill with commission and realized P&L, cash transactions, daily account value | `ibkr_flex_token` and `ibkr_flex_query_id` in `data/keys.json` |
-| TWS | Today's fills, live marks, hourly P&L path, session closes, entry IV and Greeks | TWS open and logged in, API on port 7496 (read-only) |
+| TWS | Today's fills, live marks, hourly P&L path, 5-minute option prices, session closes, entry IV and Greeks | TWS open and logged in, API on port 7496 (read-only) |
 
 The TWS API only returns the current day's fills, so Flex is the source for history.
 
@@ -118,7 +119,8 @@ enabled, and options market data for the ticker. To try the page without TWS, ru
 `VOL_SOURCE=sim ./run.sh`: a made-up chain, kept in its own `data/vol_sim.db`.
 
 **Time value and theta.** For single-leg options the trade page shows extrinsic value at each session close,
-theta per day, and a projection to expiry with the underlying and IV held where they closed.
+theta per day, and a projection to expiry with the underlying and IV held where they closed. Within three days of
+expiry it switches to hourly readings and theta per hour.
 
 ## Layout
 

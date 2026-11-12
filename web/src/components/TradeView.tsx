@@ -5,7 +5,7 @@ import { PayoffChart } from '../charts/PayoffChart'
 import { RiskHeatmap } from './RiskHeatmap'
 import { api, type Theta, type ThetaClose, type ThetaDay, type TradeDetail } from '../lib/api'
 import {
-  date, dateTime, dateYear, hold, money, num, pct, rMult, signedMoney, tone, vol,
+  contractName, date, dateTime, dateYear, hold, money, num, pct, rMult, signedMoney, tone, vol,
 } from '../lib/format'
 import { extremes, type Position } from '../lib/payoff'
 import { ErrorNote, Heading, Skeleton } from './ui'
@@ -127,12 +127,38 @@ function ViewSkeleton() {
   )
 }
 
-function Panel({ title, children, right, cut = false }: { title: string; children: ReactNode; right?: ReactNode; cut?: boolean }) {
+function Panel({ title, children, right, cut = false, className = '' }: {
+  title: string
+  children: ReactNode
+  right?: ReactNode
+  cut?: boolean
+  className?: string
+}) {
+  // a flex column, so a panel stretched to its row's height can hand the extra space to one child (flex-1)
   return (
-    <section className={`panel ${cut ? 'panel-cut' : ''} p-5`}>
+    <section className={`panel ${cut ? 'panel-cut' : ''} flex flex-col p-5 ${className}`}>
       <Heading right={right}>{title}</Heading>
-      <div className="mt-4">{children}</div>
+      <div className="mt-4 flex flex-1 flex-col">{children}</div>
     </section>
+  )
+}
+
+/** fills the space its flex parent gives it (at least `min` px) and passes that height to a chart. */
+function FillHeight({ min, children }: { min: number; children: (h: number) => ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [h, setH] = useState(min)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const ro = new ResizeObserver(([e]) => setH(Math.max(min, Math.floor(e.contentRect.height))))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [min])
+  // the chart sits absolutely inside, so its height never feeds back into the space measured
+  return (
+    <div ref={ref} className="relative flex-1" style={{ minHeight: min }}>
+      <div className="absolute inset-0">{children(h)}</div>
+    </div>
   )
 }
 
@@ -188,9 +214,7 @@ function Body({ t, onSaved }: { t: TradeDetail; onSaved: (t: TradeDetail) => voi
             <span className="text-[15px] text-ink-2">{t.strategy}</span>
             <span className="rounded-[3px] border border-line-strong px-1.5 py-px text-[11px] text-ink">{closed ? 'Closed' : 'Open'}</span>
           </div>
-          <p className="mt-1 text-[13px] text-ink-3">
-            {stock ? <span className="num">{t.quantity} shares</span> : <><span className="code">{t.contract}</span> · x{t.quantity}</>}
-          </p>
+          {stock && <p className="num mt-1 text-[13px] text-ink-3">{t.quantity} shares</p>}
         </div>
         <div className="flex flex-wrap items-end gap-x-10 gap-y-3">
           <div>
@@ -220,9 +244,11 @@ function Body({ t, onSaved }: { t: TradeDetail; onSaved: (t: TradeDetail) => voi
         </div>
       </header>
 
+      {/* the trade page's layout, the same for every trade:
+          payoff beside risk, legs and executions (one height); excursion across the page; the risk navigator beside
+          greeks and vol (one height); time value and theta across the page; thesis and post-mortem side by side last */}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_440px]">
-        <div className="min-w-0 space-y-4">
-          <Panel title={stock ? 'P&L by price' : 'Payoff'} cut right={stock ? undefined :
+          <Panel title={stock ? 'P&L by price' : 'Payoff'} cut className="min-w-0" right={stock ? undefined :
             <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-3" aria-label="Legend">
               <li className="flex items-center gap-1.5"><span aria-hidden className="h-0.5 w-4 rounded-full bg-ink" />At expiry{expiry && `, ${dateYear(expiry)}`}</li>
               <li className="flex items-center gap-1.5">
@@ -230,16 +256,21 @@ function Body({ t, onSaved }: { t: TradeDetail; onSaved: (t: TradeDetail) => voi
                 {closed ? 'At exit' : 'Now'}
               </li>
             </ul>}>
-            <PayoffChart
-              position={payoff.position}
-              atPosition={payoff.atPosition}
-              at={payoff.at}
-              atLabel={closed ? 'At exit' : 'Now'}
-              entrySpot={t.und_entry}
-              mark={payoff.spot != null && t.pnl != null ? { spot: payoff.spot, pnl: t.pnl, label: closed ? 'Exit' : 'Now' } : null}
-              include={[t.und_high, t.und_low, ...(payoff.spot != null ? [payoff.spot] : [])]}
-              single={stock}
-            />
+            <FillHeight min={320}>
+              {(h) => (
+                <PayoffChart
+                  position={payoff.position}
+                  atPosition={payoff.atPosition}
+                  at={payoff.at}
+                  atLabel={closed ? 'At exit' : 'Now'}
+                  entrySpot={t.und_entry}
+                  mark={payoff.spot != null && t.pnl != null ? { spot: payoff.spot, pnl: t.pnl, label: closed ? 'Exit' : 'Now' } : null}
+                  include={[t.und_high, t.und_low, ...(payoff.spot != null ? [payoff.spot] : [])]}
+                  single={stock}
+                  height={h}
+                />
+              )}
+            </FillHeight>
             <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Cell label={stock ? 'Max profit' : 'Max profit at expiry'} value={payoff.ext.maxProfit == null ? 'Unlimited' : signedMoney(payoff.ext.maxProfit)}
                 className={payoff.ext.maxProfit == null ? 'text-ink' : tone(payoff.ext.maxProfit)} />
@@ -249,68 +280,20 @@ function Body({ t, onSaved }: { t: TradeDetail; onSaved: (t: TradeDetail) => voi
               <Cell label={closed ? `${t.underlying} at exit` : `${t.underlying} now`}
                 value={payoff.spot == null ? '-' : num(payoff.spot)} sub={payoff.spot == null ? undefined : undMove(payoff.spot)} />
             </div>
-            <p className="mt-3 text-xs text-ink-3">
-              {stock
-                ? `P&L for ${t.quantity} shares at each price, after commissions.`
-                : `Built from the legs and fill prices of this trade. The dashed curve uses ${closed ? 'IV at exit' : 'the latest IV'} and Black-Scholes.`}
-            </p>
+            {stock && <p className="mt-3 text-xs text-ink-3">P&L for {t.quantity} shares at each price, after commissions.</p>}
           </Panel>
 
-          {!stock && !closed && riskSpot != null && (
-            <Panel title="Risk navigator" right={<span className="text-xs text-ink-3">P&L by price and vol</span>}>
-              <RiskHeatmap position={payoff.atPosition} spot={riskSpot} underlying={t.underlying} />
-            </Panel>
-          )}
-
-          <Panel title="Excursion">
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              <Cell label="MAE" value={signedMoney(t.mae)} className={tone(t.mae)} sub={rMult(t.mae / t.max_risk)} />
-              <Cell label="MFE" value={signedMoney(t.mfe)} className={tone(t.mfe)} sub={rMult(t.mfe / t.max_risk)} />
-              <Cell label="Kept of MFE" value={kept == null ? '-' : pct(kept, 0)}
-                sub={offHigh == null ? undefined : `${money(offHigh)} off the high`} />
-              <Cell label={`${t.underlying} at entry / exit`}
-                value={<>{num(t.und_entry)}<span className="text-ink-3"> / </span>{t.und_exit == null ? '-' : num(t.und_exit)}</>}
-                sub={t.und_exit == null ? undefined : undMove(t.und_exit)} />
-              <Cell label={`${t.underlying} high in trade`} value={num(t.und_high)} sub={undMove(t.und_high)} />
-              <Cell label={`${t.underlying} low in trade`} value={num(t.und_low)} sub={undMove(t.und_low)} />
-              <Cell label={stock ? 'Price in / out' : 'Position entry / exit'}
-                value={<>{num(t.entry_price)}<span className="text-ink-3"> / </span>{t.exit_price == null ? '-' : num(t.exit_price)}</>}
-                sub="per share, net" />
-              <Cell label="Position high" value={num(t.pos_high)} sub={pct((t.pos_high - t.entry_price) / t.entry_price, 0, true)} />
-              <Cell label="Position low" value={num(t.pos_low)} sub={pct((t.pos_low - t.entry_price) / t.entry_price, 0, true)} />
+        <div className="flex min-w-0 flex-col gap-4">
+          <Panel title="Risk" right={t.risk.nlv_at_entry != null
+            ? <span className="text-xs text-ink-3">Account <span className="num text-ink-2">{money(t.risk.nlv_at_entry)}</span> at entry</span> : undefined}>
+            <div className="grid grid-cols-2 gap-2">
+              <Cell label="At risk" value={t.risk.capital == null ? 'Unlimited' : money(t.risk.capital)}
+                sub={t.risk.capital_pct != null ? `${pct(t.risk.capital_pct, 1)} of account` : undefined} />
+              <Cell label="Sharpe" value={t.risk.sharpe == null ? '-' : num(t.risk.sharpe, 2)}
+                sub={t.risk.sharpe == null ? 'needs 3 price points' : `over the hold, from ${t.risk.sharpe_every === 'hour' ? 'hourly' : '5-minute'} prices`} className={tone(t.risk.sharpe)} />
             </div>
           </Panel>
 
-          {!stock && <Panel title="Greeks and volatility" right={<span className="text-xs text-ink-3">Position, USD</span>}>
-            <table className="w-full text-[13px]">
-              <thead className="text-xs text-ink-3">
-                <tr className="h-8 border-b border-line text-right">
-                  <th scope="col" className="text-left font-normal"><span className="sr-only">Measure</span></th>
-                  <th scope="col" className="font-normal">Entry</th>
-                  <th scope="col" className="font-normal">Exit</th>
-                  <th scope="col" className="font-normal">Change</th>
-                </tr>
-              </thead>
-              <tbody className="num">
-                <GreekRow label="Delta" a={t.delta_entry} b={t.delta_exit} d={1} hint="$ per $1 move" />
-                <GreekRow label="Gamma" a={t.gamma_entry} b={t.gamma_exit} d={2} hint="delta per $1" />
-                <GreekRow label="Theta" a={t.theta_entry} b={t.theta_exit} d={2} hint="$ per day" />
-                <GreekRow label="Vega" a={t.vega_entry} b={t.vega_exit} d={2} hint="$ per vol pt" />
-                <GreekRow label="IV, main leg" a={t.iv_entry * 100} b={t.iv_exit == null ? null : t.iv_exit * 100} d={1} hint="vol pts" />
-              </tbody>
-            </table>
-            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <Cell label="IV rank at entry" value={t.iv_rank_entry == null ? '-' : num(t.iv_rank_entry, 0)} />
-              <Cell label="HV20 at entry" value={vol(t.hv20_entry)} />
-              <Cell label="IV minus HV20" value={t.hv20_entry == null ? '-' : num((t.iv_entry - t.hv20_entry) * 100, 1, true)} sub="vol pts" />
-              <Cell label="DTE at entry" value={t.dte_entry} sub="days" />
-            </div>
-          </Panel>}
-
-          {!stock && <ThetaPanel t={t} />}
-        </div>
-
-        <div className="min-w-0 space-y-4">
           <Panel title="Legs">
             <ul className="space-y-2">
               {t.legs.map((l) => (
@@ -340,14 +323,14 @@ function Body({ t, onSaved }: { t: TradeDetail; onSaved: (t: TradeDetail) => voi
             </ul>
           </Panel>
 
-          <Panel title="Executions" right={<span className="num text-xs text-ink-3">{money(t.commissions, 2)} fees</span>}>
+          <Panel title="Executions" className="flex-1" right={<span className="num text-xs text-ink-3">{money(t.commissions, 2)} fees</span>}>
             <ol className="space-y-2">
               {t.fills.map((f) => (
                 <li key={f.id} className="rounded-[var(--radius-sm)] bg-surface-2 px-3 py-2.5 text-[13px]">
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="min-w-0">
                       <span className={`mr-2 text-xs ${f.side === 'BOT' ? 'text-ink' : 'text-ink-2'}`}>{f.side === 'BOT' ? 'Bought' : 'Sold'}</span>
-                      <span className="text-ink-2"><span className="num">{f.quantity}</span> x <span className="code">{f.description}</span></span>
+                      <span className="text-ink-2"><span className="num">{f.quantity}</span> x <span className="code">{contractName(f.description)}</span></span>
                     </span>
                     <span className="num text-ink">{num(f.price)}</span>
                   </div>
@@ -359,38 +342,94 @@ function Body({ t, onSaved }: { t: TradeDetail; onSaved: (t: TradeDetail) => voi
               ))}
             </ol>
           </Panel>
-
-          <Notes t={t} onSaved={onSaved} />
         </div>
       </div>
+
+      <Panel title="Excursion">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-9">
+              <Cell label="MAE" value={signedMoney(t.mae)} className={tone(t.mae)} sub={rMult(t.mae / t.max_risk)} />
+              <Cell label="MFE" value={signedMoney(t.mfe)} className={tone(t.mfe)} sub={rMult(t.mfe / t.max_risk)} />
+              <Cell label="Kept of MFE" value={kept == null ? '-' : pct(kept, 0)}
+                sub={offHigh == null ? undefined : `${money(offHigh)} off the high`} />
+              <Cell label={`${t.underlying} at entry / exit`}
+                value={<>{num(t.und_entry)}<span className="text-ink-3"> / </span>{t.und_exit == null ? '-' : num(t.und_exit)}</>}
+                sub={t.und_exit == null ? undefined : undMove(t.und_exit)} />
+              <Cell label={`${t.underlying} high in trade`} value={num(t.und_high)} sub={undMove(t.und_high)} />
+              <Cell label={`${t.underlying} low in trade`} value={num(t.und_low)} sub={undMove(t.und_low)} />
+              <Cell label={stock ? 'Price in / out' : 'Position entry / exit'}
+                value={<>{num(t.entry_price)}<span className="text-ink-3"> / </span>{t.exit_price == null ? '-' : num(t.exit_price)}</>}
+                sub="per share, net" />
+              <Cell label="Position high" value={num(t.pos_high)} sub={pct((t.pos_high - t.entry_price) / t.entry_price, 0, true)} />
+              <Cell label="Position low" value={num(t.pos_low)} sub={pct((t.pos_low - t.entry_price) / t.entry_price, 0, true)} />
+        </div>
+      </Panel>
+
+      {!stock && (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_440px]">
+          <Panel title="Risk navigator" className="min-w-0" right={<span className="text-xs text-ink-3">P&L by price and vol{closed ? ', from entry' : ''}</span>}>
+            {closed
+              ? <RiskHeatmap position={payoff.position} spot={t.und_entry} underlying={t.underlying} from={t.opened_at} account={t.risk.nlv_at_entry} />
+              : <RiskHeatmap position={payoff.atPosition} spot={riskSpot ?? t.und_entry} underlying={t.underlying} />}
+          </Panel>
+          <Panel title="Greeks and volatility" className="min-w-0" right={<span className="text-xs text-ink-3">Position, USD</span>}>
+            <div className="flex-1">
+            <table className="h-full w-full text-[13px]">
+              <thead className="text-xs text-ink-3">
+                <tr className="h-8 border-b border-line text-right">
+                  <th scope="col" className="text-left font-normal"><span className="sr-only">Measure</span></th>
+                  <th scope="col" className="font-normal">Entry</th>
+                  <th scope="col" className="font-normal">Exit</th>
+                  <th scope="col" className="font-normal">Change</th>
+                </tr>
+              </thead>
+              <tbody className="num">
+                <GreekRow label="Delta" a={t.delta_entry} b={t.delta_exit} d={1} hint="$ per $1 move" />
+                <GreekRow label="Gamma" a={t.gamma_entry} b={t.gamma_exit} d={2} hint="delta per $1" />
+                <GreekRow label="Theta" a={t.theta_entry} b={t.theta_exit} d={2} hint="$ per day" />
+                <GreekRow label="Vega" a={t.vega_entry} b={t.vega_exit} d={2} hint="$ per vol pt" />
+                <GreekRow label="IV, main leg" a={t.iv_entry * 100} b={t.iv_exit == null ? null : t.iv_exit * 100} d={1} hint="vol pts" />
+              </tbody>
+            </table>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Cell label="IV rank at entry" value={t.iv_rank_entry == null ? '-' : num(t.iv_rank_entry, 0)} />
+              <Cell label="HV20 at entry" value={vol(t.hv20_entry)} />
+              <Cell label="IV minus HV20" value={t.hv20_entry == null ? '-' : num((t.iv_entry - t.hv20_entry) * 100, 1, true)} sub="vol pts" />
+              <Cell label="DTE at entry" value={t.dte_entry} sub="days" />
+            </div>
+          </Panel>
+        </div>
+      )}
+
+      {!stock && <ThetaPanel t={t} />}
+
+      <Notes t={t} onSaved={onSaved} />
     </div>
   )
 }
 
-/** How much faster than the last close's theta counts as theta speeding up. */
-const ACCEL = 1.5
-const SPEED_UP = 'var(--color-warn)'
-const HALF = 'var(--color-info)'
+const DAY_MS = 86_400_000
+const HOUR_MS = 3_600_000
 /** Share of the premium paid that theta has to take for the third reference date. */
 const PREMIUM_SHARE = 0.4
 const PREMIUM_LINE = 'var(--color-violet)'
 
 /**
- * Running total of theta: each close's theta counts for every calendar day until the next close, then the
- * projected daily decay. Returns what was taken up to the last close and the first day the total reaches `target`.
+ * running total of theta: each reading's theta counts for every day (or hour) until the next reading, then the
+ * projected decay. returns what was taken up to the last reading and the first day (or hour) the total reaches `target`.
  */
-function thetaTaken(history: ThetaClose[], projection: ThetaDay[], target: number) {
+function thetaTaken(history: ThetaClose[], projection: ThetaDay[], target: number, unit: number) {
   let total = 0
   let hit: string | null = null
   history.forEach((h, i) => {
     const next = history[i + 1]
     if (h.theta == null || !next) return
-    const days = Math.round((new Date(next.date).getTime() - new Date(h.date).getTime()) / 86_400_000)
+    const days = (new Date(next.date).getTime() - new Date(h.date).getTime()) / unit
     const rate = -h.theta
     if (hit == null && rate > 0 && total + rate * days >= target) {
-      const d = new Date(h.date)
-      d.setUTCDate(d.getUTCDate() + Math.ceil((target - total) / rate))
-      hit = d.toISOString().slice(0, 10)
+      const at = new Date(h.date).getTime() + Math.ceil((target - total) / rate) * unit
+      // daily: the date itself; hourly: the first projected hour at or after it, so the marker lands on the chart
+      hit = unit === DAY_MS ? new Date(at).toISOString().slice(0, 10) : projection.find((p) => new Date(p.date).getTime() >= at)?.date ?? null
     }
     total += rate * days
   })
@@ -418,7 +457,10 @@ function MarkerCell({ color, label, value, sub }: { color: string; label: string
   )
 }
 
-/** Extrinsic value left at each close, what theta takes each day, and the path to expiry from the latest close. */
+/**
+ * extrinsic value left at each close, what theta takes each day, and the path to expiry from the latest close.
+ * three days or less from expiry it switches to hourly readings, since a daily view would be one or two points.
+ */
 function ThetaPanel({ t }: { t: TradeDetail }) {
   const [data, setData] = useState<Theta | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -435,71 +477,59 @@ function ThetaPanel({ t }: { t: TradeDetail }) {
   if (!data) return <Panel title="Time value and theta"><Skeleton className="h-80" /></Panel>
   if (!data.available) return null
 
+  const hourly = data.step === 'hour'
+  const unit = hourly ? HOUR_MS : DAY_MS
+  const per = hourly ? 'hour' : 'day'
+  const reading = hourly ? 'reading' : 'close'
+  const when = (d: string) => (hourly ? dateTime(d) : dateYear(d))
   const last = [...data.history].reverse().find((h) => h.iv != null) ?? null
   const first = data.history[0] ?? null
   const start = data.extrinsic_entry ?? first?.extrinsic ?? null
   const now = last?.extrinsic ?? null
-  const today = new Date().toISOString().slice(0, 10)
-  const left = Math.max(0, Math.round((new Date(data.expiry).getTime() - new Date(today).getTime()) / 86_400_000))
+  // expiry is the 16:00 new york close on the expiry date
+  const expiryAt = new Date(`${data.expiry}T21:00:00Z`).getTime()
+  const fromNow = Math.max(0, expiryAt - Date.now())
   const eatenSoFar = start != null && now != null ? start - now : null
-  // when the daily decay first reaches 1.5x the theta at the last close, and when half the extrinsic left is gone
-  const base = last?.theta != null ? -last.theta : null
-  const speedUp = base == null ? null : data.projection.find((d) => d.decay >= ACCEL * base) ?? null
-  const half = now == null ? null : data.projection.find((d) => d.extrinsic <= now / 2) ?? null
-  const before = (d: string) => Math.round((new Date(data.expiry).getTime() - new Date(d).getTime()) / 86_400_000)
+  const before = (d: string) => {
+    const left = (expiryAt - new Date(hourly ? d : `${d}T21:00:00Z`).getTime()) / unit
+    return `${Math.round(left)} ${per}${Math.round(left) === 1 ? '' : 's'} before expiry`
+  }
   const premium = t.entry_price * t.multiplier * t.quantity
-  const share = thetaTaken(data.history, data.projection, PREMIUM_SHARE * premium)
-  const markers = [
-    ...(speedUp ? [{ date: speedUp.date, color: SPEED_UP }] : []),
-    ...(half ? [{ date: half.date, color: HALF }] : []),
-    ...(share.hit ? [{ date: share.hit, color: PREMIUM_LINE }] : []),
-  ]
+  const share = thetaTaken(data.history, data.projection, PREMIUM_SHARE * premium, unit)
+  const markers = share.hit ? [{ date: share.hit, color: PREMIUM_LINE }] : []
 
   return (
     <Panel title="Time value and theta" right={
       <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-3" aria-label="Legend">
-        <li className="flex items-center gap-1.5"><span aria-hidden className="h-0.5 w-4 rounded-full bg-ink" />At each close</li>
+        <li className="flex items-center gap-1.5"><span aria-hidden className="h-0.5 w-4 rounded-full bg-ink" />{hourly ? 'Each hour' : 'At each close'}</li>
         <li className="flex items-center gap-1.5">
           <svg aria-hidden width="16" height="2"><line x1="0" x2="16" y1="1" y2="1" stroke="var(--color-ink-2)" strokeWidth="1.5" strokeDasharray="4 3" /></svg>
           Projected
         </li>
       </ul>}>
       {data.history.length + data.projection.length < 2 ? (
-        <p className="text-[13px] text-ink-3">No session closes recorded yet. They appear after the next TWS sync.</p>
+        <p className="text-[13px] text-ink-3">No {hourly ? 'hourly readings' : 'session closes'} recorded yet. They appear after the next TWS sync.</p>
       ) : (
-        <DecayChart history={data.history} projection={data.projection} markers={markers}
-          ariaLabel={`Extrinsic value of the position falling from ${money(start)} to zero at expiry, with theta per day below`} />
+        <DecayChart history={data.history} projection={data.projection} markers={markers} hourly={hourly}
+          ariaLabel={`Extrinsic value of the position falling from ${money(start)} to zero at expiry, with theta per ${per} below`} />
       )}
       <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Cell label="Extrinsic at last close" value={money(now, 2)} sub={last ? date(last.date) : undefined} />
-        <Cell label="Theta at last close" value={last?.theta == null ? '-' : `${money(last.theta, 2)}/day`} className="text-neg" />
+        <Cell label={`Extrinsic at last ${reading}`} value={money(now, 2)} sub={last ? (hourly ? dateTime(last.date) : date(last.date)) : undefined} />
+        <Cell label={`Theta at last ${reading}`} value={last?.theta == null ? '-' : `${money(last.theta, 2)}/${per}`} className="text-neg" />
         <Cell label={data.extrinsic_entry != null ? 'Extrinsic lost since entry' : 'Extrinsic lost since first close'}
           value={eatenSoFar == null ? '-' : money(eatenSoFar, 2)}
           sub={eatenSoFar == null || !start ? undefined : `${pct(eatenSoFar / start, 0)} of ${money(start)}`} />
-        <Cell label="Days to expiry" value={left} sub={dateYear(data.expiry)} />
+        {hourly
+          ? <Cell label="Hours to expiry" value={Math.round(fromNow / HOUR_MS)} sub={dateYear(data.expiry)} />
+          : <Cell label="Days to expiry" value={Math.round(fromNow / DAY_MS)} sub={dateYear(data.expiry)} />}
       </div>
-      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <MarkerCell color={SPEED_UP} label={`Theta reaches ${ACCEL}x the last close's rate`}
-          value={speedUp ? dateYear(speedUp.date) : '-'}
-          sub={speedUp && base != null ? `${before(speedUp.date)} days before expiry; ${money(speedUp.decay, 2)}/day vs ${money(base, 2)}/day now` : undefined} />
-        <MarkerCell color={HALF} label="Half of the extrinsic left is gone by"
-          value={half ? dateYear(half.date) : '-'}
-          sub={half && now != null ? `${before(half.date)} days before expiry; ${money(now / 2)} of ${money(now)}` : undefined} />
+      <div className="mt-2">
         <MarkerCell color={PREMIUM_LINE} label={`Theta takes ${pct(PREMIUM_SHARE, 0)} of the premium paid by`}
-          value={share.hit ? dateYear(share.hit) : 'Not before expiry'}
+          value={share.hit ? when(share.hit) : 'Not before expiry'}
           sub={share.hit
-            ? `${before(share.hit)} days before expiry; ${money(PREMIUM_SHARE * premium)} of ${money(premium)}; ${money(share.soFar)} taken so far`
+            ? `${before(share.hit)}; ${money(PREMIUM_SHARE * premium)} of ${money(premium)}; ${money(share.soFar)} taken so far`
             : `Projected theta adds up to ${money(share.total)} of ${money(premium)}`} />
       </div>
-      <p className="mt-3 text-xs text-ink-3">
-        Extrinsic is the option price minus its intrinsic value, for the whole position. Closes come from the TWS sync during
-        US market hours; the last sync of the session sets the close. The projection holds {t.underlying} at{' '}
-        <span className="num">{last ? num(last.underlying) : '-'}</span> and IV at <span className="num">{vol(last?.iv)}</span> from
-        the last close and uses Black-Scholes, counting every calendar day, so both dates move as the price and IV move.
-        Past the first date each day costs more than now; they describe the decay, not when to exit.
-        "Theta takes" adds up each close's theta for every calendar day to the next close, then the projected decay; it counts
-        time alone, not price or IV moves, and the premium is the entry price for the whole position before commissions. "Lost since entry" also includes moves in price and IV.
-      </p>
     </Panel>
   )
 }
@@ -537,14 +567,26 @@ function Notes({ t, onSaved }: { t: TradeDetail; onSaved: (t: TradeDetail) => vo
   const [thesis, setThesis] = useState(t.thesis)
   const [post, setPost] = useState(t.post_mortem)
   const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const dirty = thesis !== t.thesis || post !== t.post_mortem
+  const saved = useRef({ thesis: t.thesis, post: t.post_mortem })
+  const dirty = thesis !== saved.current.thesis || post !== saved.current.post
+  const latest = useRef({ thesis, post })
+  latest.current = { thesis, post }
 
-  useEffect(() => { setThesis(t.thesis); setPost(t.post_mortem); setState('idle') }, [t.id, t.thesis, t.post_mortem])
+  // only another trade resets the fields; a save coming back never overwrites what is being typed
+  useEffect(() => {
+    setThesis(t.thesis)
+    setPost(t.post_mortem)
+    saved.current = { thesis: t.thesis, post: t.post_mortem }
+    setState('idle')
+  }, [t.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function save() {
+    const draft = latest.current
+    if (draft.thesis === saved.current.thesis && draft.post === saved.current.post) return
     setState('saving')
     try {
-      const nt = await api.saveNotes(t.id, { thesis, post_mortem: post })
+      const nt = await api.saveNotes(t.id, { thesis: draft.thesis, post_mortem: draft.post })
+      saved.current = draft
       setState('saved')
       onSaved(nt)
     } catch {
@@ -552,38 +594,36 @@ function Notes({ t, onSaved }: { t: TradeDetail; onSaved: (t: TradeDetail) => vo
     }
   }
 
-  const field = 'block w-full resize-none overflow-hidden rounded-[var(--radius-sm)] border border-line-strong bg-surface-2 px-3 py-2.5 text-[13px] leading-relaxed text-ink focus:border-ink-2 focus:outline-none'
+  // saves a second after typing stops, on leaving a field, and when the trade view closes
+  useEffect(() => {
+    if (!dirty) return
+    const id = window.setTimeout(save, 1000)
+    return () => window.clearTimeout(id)
+  }, [thesis, post]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => {
+    const d = latest.current
+    if (d.thesis !== saved.current.thesis || d.post !== saved.current.post) {
+      api.saveNotes(t.id, { thesis: d.thesis, post_mortem: d.post }).catch(() => {})
+    }
+  }, [t.id])
+
+  const status = <span className="text-xs text-ink-3" aria-live="polite">
+    {state === 'error' ? <span className="text-neg">Could not save</span> : dirty || state === 'saving' ? 'Saving' : state === 'saved' ? 'Saved' : ''}
+  </span>
+  const field = 'block w-full flex-1 resize-none overflow-hidden rounded-[var(--radius-sm)] border border-line-strong bg-surface-2 px-3 py-2.5 text-[13px] leading-relaxed text-ink focus:border-ink-2 focus:outline-none'
 
   return (
-    <Panel title="Journal">
-      <div className="space-y-5">
-        <div className="space-y-2">
-          <label htmlFor={`thesis-${t.id}`} className="block text-[13px] text-ink">Thesis</label>
-          <GrowingTextarea id={`thesis-${t.id}`} value={thesis} onChange={(e) => setThesis(e.target.value)}
-            rows={4} aria-describedby={`thesis-help-${t.id}`} className={field} />
-          <p id={`thesis-help-${t.id}`} className="text-xs text-ink-3">
-            Why you are in this trade, written before the outcome is known.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <label htmlFor={`post-${t.id}`} className="block text-[13px] text-ink">Post-mortem</label>
-          <GrowingTextarea id={`post-${t.id}`} value={post} onChange={(e) => setPost(e.target.value)} rows={4}
-            aria-describedby={`post-help-${t.id}`} className={field} />
-          <p id={`post-help-${t.id}`} className="text-xs text-ink-3">
-            What happened against the thesis, and what you would repeat or change.
-          </p>
-        </div>
-
-        <div className="flex items-center justify-end gap-3">
-          {state === 'saved' && !dirty && <span className="text-xs text-ink-3">Saved</span>}
-          {state === 'error' && <span className="text-xs text-neg">Could not save. Try again.</span>}
-          <button type="button" onClick={save} disabled={!dirty || state === 'saving'}
-            className="h-8 rounded-[var(--radius-md)] bg-ink px-4 text-xs font-medium text-bg transition-opacity hover:opacity-90 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40">
-            {state === 'saving' ? 'Saving' : 'Save notes'}
-          </button>
-        </div>
-      </div>
-    </Panel>
+    <div className="grid gap-4 md:grid-cols-2">
+      <Panel title="Thesis" className="min-w-0" right={status}>
+        <GrowingTextarea id={`thesis-${t.id}`} aria-label="Thesis" value={thesis} onChange={(e) => setThesis(e.target.value)}
+          onBlur={save} rows={5} aria-describedby={`thesis-help-${t.id}`} className={field} />
+        <p id={`thesis-help-${t.id}`} className="mt-2 text-xs text-ink-3">Why you are in this trade, written before the outcome is known.</p>
+      </Panel>
+      <Panel title="Post-mortem" className="min-w-0" right={status}>
+        <GrowingTextarea id={`post-${t.id}`} aria-label="Post-mortem" value={post} onChange={(e) => setPost(e.target.value)}
+          onBlur={save} rows={5} aria-describedby={`post-help-${t.id}`} className={field} />
+        <p id={`post-help-${t.id}`} className="mt-2 text-xs text-ink-3">What happened against the thesis, and what you would repeat or change.</p>
+      </Panel>
+    </div>
   )
 }

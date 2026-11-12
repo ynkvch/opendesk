@@ -170,7 +170,7 @@ export type ThetaClose = {
   iv: number | null
   /** position extrinsic value at the close, USD */
   extrinsic: number
-  /** position theta at the close, USD per calendar day */
+  /** position theta at the reading, USD per calendar day (per hour when step is 'hour') */
   theta: number | null
 }
 
@@ -180,6 +180,8 @@ export type Theta =
   | { available: false; reason: string }
   | {
       available: true
+      /** 'hour' when the option was three days or less from expiry: readings each hour instead of each close */
+      step: 'day' | 'hour'
       expiry: string
       strike: number
       right: 'C' | 'P'

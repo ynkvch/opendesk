@@ -72,3 +72,6 @@ export function ago(iso: string | null | undefined): string {
   if (min < 48 * 60) return `${Math.round(min / 60)} h ago`
   return `${Math.round(min / 1440)} d ago`
 }
+
+/** ib's contract description with the expiry spaced out: "NVDA 13NOV26 162.5 C" -> "NVDA 13 NOV 26 162.5 C". */
+export const contractName = (d: string) => d.replace(/\b(\d{1,2})([A-Z]{3})(\d{2})\b/g, '$1 $2 $3')
