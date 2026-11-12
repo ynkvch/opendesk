@@ -58,7 +58,17 @@ export type Fill = {
 
 export type Mark = { time: string; underlying: number; pnl: number }
 
+export type TradeRisk = {
+  nlv_at_entry: number | null // account value on the day the trade opened
+  capital: number | null // the most the position can lose; null when unlimited
+  capital_pct: number | null // as a share of the account at entry
+  sharpe: number | null // over the holding period, not annualised
+  sharpe_steps: number
+  sharpe_every: '5 minutes' | 'hour' // the price path it was measured on
+}
+
 export type TradeDetail = TradeRow & {
+  risk: TradeRisk
   realized_pnl: number | null
   und_entry: number
   und_exit: number | null

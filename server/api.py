@@ -2,6 +2,7 @@
 
 Run (from the project folder):  uvicorn server.api:app --port 8000 --reload
 """
+import math
 import sqlite3
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -94,6 +95,51 @@ def list_trades() -> list[dict]:
     return out
 
 
+def _max_loss(t: dict, legs: list[dict]) -> float | None:
+    """the most the position can lose at expiry, from its payoff across prices; none when unlimited (a naked short call)."""
+    mult, qty = t["multiplier"], t["quantity"]
+    if t["asset"] == "STK" or not legs:
+        return abs(t["entry_price"]) * mult * qty + t["commissions"]
+    top = max(l["strike"] for l in legs) * 4
+
+    def payoff(s: float) -> float:
+        value = sum((1 if l["side"] == "BUY" else -1) * (max(0.0, s - l["strike"]) if l["right_"] == "C" else max(0.0, l["strike"] - s))
+                    for l in legs)
+        return (value - t["entry_price"]) * mult * qty
+    if payoff(top * 2) < payoff(top) - 1e-6:  # still falling far above the strikes: short calls not covered
+        return None
+    return max(0.0, -min(payoff(top * i / 400) for i in range(401))) + t["commissions"]
+
+
+def _trade_risk(t: dict, legs: list[dict], marks: list[dict]) -> dict:
+    """what the trade put at risk against the account, and its sharpe over the holding period.
+
+    sharpe: the p&l path's step returns on the capital at risk, (total return - risk-free over the hold) divided by
+    their volatility over the hold. it is for the holding period, not annualised, so short and long trades compare.
+    the path is the 5-minute one when tws supplied it, otherwise the hourly marks."""
+    acct = _rows("SELECT net_liquidation FROM account_daily WHERE date <= ? ORDER BY date DESC LIMIT 1", (t["opened_at"][:10],)) \
+        or _rows("SELECT net_liquidation FROM account_daily ORDER BY date LIMIT 1")
+    nlv = acct[0]["net_liquidation"] if acct else None
+    mult, qty = t["multiplier"], t["quantity"]
+    capital = _max_loss(t, legs)
+    fine = _rows("SELECT time, pnl FROM marks_5m WHERE trade_id = ? ORDER BY time", (t["id"],))
+    if len(fine) >= 4:
+        marks = fine
+    sharpe = None
+    base = capital or abs(t["entry_price"]) * mult * qty
+    pts = [0.0] + [m["pnl"] for m in marks]
+    steps = [(b - a) / base for a, b in zip(pts, pts[1:])] if base else []
+    if len(steps) >= 3:
+        mean = sum(steps) / len(steps)
+        sd = math.sqrt(sum((r - mean) ** 2 for r in steps) / (len(steps) - 1))
+        held = (_hold_hours(t) or 0) / (24 * 365)
+        if sd > 0:
+            sharpe = (sum(steps) - bs.RATE * held) / (sd * math.sqrt(len(steps)))
+    pct = lambda x: x / nlv if x is not None and nlv else None
+    return {"nlv_at_entry": nlv, "capital": capital, "capital_pct": pct(capital), "sharpe": sharpe,
+            "sharpe_steps": len(steps), "sharpe_every": "5 minutes" if marks is fine else "hour"}
+
+
 @app.get("/api/trades/{trade_id}")
 def get_trade(trade_id: int) -> dict:
     rows = _rows("SELECT * FROM trades WHERE id = ?", (trade_id,))
@@ -114,6 +160,7 @@ def get_trade(trade_id: int) -> dict:
         "fills": _rows("SELECT id, trade_id, time, action, side, description, quantity, price, commission"
                        " FROM fills WHERE trade_id = ? ORDER BY time, id", (trade_id,)),
         "marks": marks,
+        "risk": _trade_risk(t, legs, marks),
     }
 
 

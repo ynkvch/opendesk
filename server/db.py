@@ -84,6 +84,15 @@ CREATE TABLE IF NOT EXISTS marks (
     PRIMARY KEY (trade_id, time)
 );
 
+-- The position's p&l at each 5-minute option midpoint bar, entry to exit; drives the per-trade Sharpe.
+-- IBKR serves no history for expired options, so a trade gets it while open or before its expiry.
+CREATE TABLE IF NOT EXISTS marks_5m (
+    trade_id    INTEGER NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
+    time        TEXT NOT NULL,               -- bar close, UTC
+    pnl         REAL NOT NULL,
+    PRIMARY KEY (trade_id, time)
+);
+
 -- Closing option midpoint and underlying per session while the trade is open; drives the theta chart.
 -- Today's row holds the latest hourly bar until the session's last sync replaces it with the close.
 CREATE TABLE IF NOT EXISTS option_daily (

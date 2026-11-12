@@ -7,6 +7,7 @@ What it does on each run:
   - for every open trade: hourly price path since entry, live mark and IV
     -> marks, MAE/MFE, underlying high/low, und_last / iv_last
   - for a trade that closed since the last run: the path up to the exit and the exit IV/Greeks
+  - for every option trade not yet expired: its 5-minute midpoint path -> marks_5m (the trade's Sharpe)
 
 The TWS API only returns fills from the current day. Older fills (from the TWS Trade Log)
 are added once with --add-fill; the contract comes from your open position.
@@ -309,6 +310,53 @@ def model_snapshot(ib: IB, conn, tid: int, item, und) -> None:
     print(f"IBKR model for trade {tid}: mark {item.marketPrice:.4f}, P&L {item.unrealizedPNL:+.2f}, underlying {und_px}")
 
 
+# ---------------------------------------------------------------- 5-minute paths
+
+def sync_bars_5m(ib: IB, conn) -> None:
+    """the p&l of each option trade at every 5-minute midpoint bar from entry to exit, for its sharpe. open trades
+    are refreshed every run; a closed one is read once. expired options have no history at ibkr, so those are skipped."""
+    today = datetime.now(NY).date().isoformat()
+    rows = conn.execute(
+        "SELECT * FROM trades t WHERE asset = 'OPT' AND (status = 'open'"
+        " OR NOT EXISTS (SELECT 1 FROM marks_5m m WHERE m.trade_id = t.id))"
+        " AND NOT EXISTS (SELECT 1 FROM legs l WHERE l.trade_id = t.id AND (l.expiry < ? OR l.conid IS NULL))",
+        (today,)).fetchall()
+    for t in rows:
+        try:
+            legs = conn.execute("SELECT * FROM legs WHERE trade_id = ?", (t["id"],)).fetchall()
+            if not legs:
+                continue
+            opened = datetime.fromisoformat(t["opened_at"].replace("Z", "+00:00"))
+            exited = datetime.fromisoformat(t["closed_at"].replace("Z", "+00:00")) if t["closed_at"] else None
+            end = (exited + timedelta(minutes=10)).strftime("%Y%m%d %H:%M:%S UTC") if exited else ""
+            days = min(30, ((exited or datetime.now(timezone.utc)) - opened).days + 2)
+            # position value per bar: each leg's midpoint, signed by side, summed over the legs that have that bar
+            value: dict[datetime, float] = {}
+            seen: dict[datetime, int] = {}
+            for lg in legs:
+                c = Option(conId=lg["conid"], exchange="SMART")
+                ib.qualifyContracts(c)
+                sign = (1 if lg["side"] == "BUY" else -1) * lg["ratio"]
+                for x in bars(ib, c, f"{days} D", "5 mins", "MIDPOINT", True, end):
+                    close_at = x.date + timedelta(minutes=5)
+                    if close_at <= opened or (exited and close_at > exited):
+                        continue
+                    value[close_at] = value.get(close_at, 0.0) + sign * x.close
+                    seen[close_at] = seen.get(close_at, 0) + 1
+            mult = t["multiplier"] * t["quantity"]
+            path = [(iso(at), round((v - t["entry_price"]) * mult - t["commissions"], 2))
+                    for at, v in sorted(value.items()) if seen[at] == len(legs)]
+            if exited:
+                path.append((t["closed_at"], t["realized_pnl"]))
+            if not path:
+                continue
+            conn.execute("DELETE FROM marks_5m WHERE trade_id = ?", (t["id"],))
+            conn.executemany("INSERT OR REPLACE INTO marks_5m VALUES (?,?,?)", [(t["id"], a, p) for a, p in path])
+            print(f"Trade {t['id']}: {len(path)} five-minute marks")
+        except Exception as ex:
+            print(f"Trade {t['id']}: no five-minute path ({ex})")
+
+
 # ---------------------------------------------------------------- main
 
 def main() -> None:
@@ -348,6 +396,7 @@ def main() -> None:
     sync_benchmark(ib, conn)
     sync_executions(ib, conn)
     sync_open(ib, conn)
+    sync_bars_5m(ib, conn)
     conn.execute("INSERT INTO sync_runs VALUES ('tws', ?, 'ok')", (iso(datetime.now(timezone.utc)),))
     conn.commit()
     ib.disconnect()
