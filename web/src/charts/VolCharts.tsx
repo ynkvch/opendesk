@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { linear, niceTicks } from './util'
 
 /** series colours for the vol charts: periwinkle, lavender, tan, sky, then the regime blues. */
@@ -309,67 +309,179 @@ export function CurveChart({ series, categories, xFormat = String, format, ariaL
   )
 }
 
-/** a strike ladder: strikes down the left (highest at the top), calls to the right in green, puts to the left in red, spot as a dashed rule. */
-export function FlowBars({ rows, spot, format, ariaLabel }: {
+/**
+ * a strike ladder: strikes down the left (highest at the top), calls to the right in green, puts to the left in red,
+ * spot as a dashed rule. every strike shows by default; the strip on the right is an overview of the whole chain with
+ * a window: drag its top or bottom edge to resize it, or the line across its middle to move it. double-click the strip
+ * to show all. the window is remembered under `storageKey`.
+ */
+export function FlowBars({ rows, spot, format, ariaLabel, storageKey }: {
   rows: { strike: number; calls: number; puts: number }[]
   spot: number
   format: (v: number) => string
   ariaLabel: string
+  storageKey?: string
 }) {
   const [ref, { w, h }] = useSize<HTMLDivElement>()
   const [hover, setHover] = useState<number | null>(null)
-  const pad = { top: 8, right: 16, bottom: 28, left: 56 }
+  // the zoom window as strike values (top = highest shown), so it survives the chain refreshing; null = all strikes
+  type Win = { top: number; bottom: number } | null
+  const load = (): Win => {
+    try { return storageKey ? JSON.parse(localStorage.getItem(storageKey) ?? 'null') : null } catch { return null }
+  }
+  const [win, setWinState] = useState<Win>(load)
+  // another ticker brings its own saved window
+  useEffect(() => { setWinState(load()) }, [storageKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  const setWin = (w: Win) => {
+    setWinState(w)
+    try { if (storageKey) { if (w) localStorage.setItem(storageKey, JSON.stringify(w)); else localStorage.removeItem(storageKey) } } catch { /* storage blocked */ }
+  }
+  const drag = useRef<{ mode: 'move' | 'top' | 'bottom'; y0: number; i0: number; i1: number } | null>(null)
+  const STRIP = 44
+  const pad = { top: 8, right: STRIP + 22, bottom: 28, left: 56 }
   const ladder = useMemo(() => [...rows].sort((a, b) => b.strike - a.strike), [rows])
+  const n = ladder.length
+
+  // the window in ladder indices, [i0, i1)
+  const [i0, i1] = useMemo(() => {
+    if (!win || !n) return [0, n]
+    let a = ladder.findIndex((r) => r.strike <= win.top)
+    let b = n - [...ladder].reverse().findIndex((r) => r.strike >= win.bottom)
+    if (a < 0) a = n - 1
+    if (b > n) b = n
+    return b - a >= 2 ? [a, b] : [0, n]
+  }, [win, ladder, n])
+  const view = useMemo(() => ladder.slice(i0, i1), [ladder, i0, i1])
+  const zoomed = i0 > 0 || i1 < n
 
   const geo = useMemo(() => {
-    if (!w || !h || !ladder.length) return null
-    const most = Math.max(1, ...ladder.map((r) => Math.max(r.calls, r.puts)))
+    if (!w || !h || !view.length) return null
+    const most = Math.max(1, ...view.map((r) => Math.max(r.calls, r.puts)))
     const ticks = niceTicks(0, most, 3).filter((v) => v > 0 && v <= most * 1.05)
     const mid = pad.left + (w - pad.left - pad.right) / 2
     const half = (w - pad.left - pad.right) / 2
     const sx = (v: number) => (v / most) * half * 0.96
-    const band = (h - pad.top - pad.bottom) / ladder.length
+    const band = (h - pad.top - pad.bottom) / view.length
     const sy = (i: number) => pad.top + band * (i + 0.5)
-    // spot sits between the strikes around it (the ladder runs high to low)
-    const j = ladder.findIndex((r) => r.strike <= spot)
-    const spotY = j <= 0 ? sy(Math.max(j, 0)) : sy(j - 1) + ((ladder[j - 1].strike - spot) / (ladder[j - 1].strike - ladder[j].strike)) * band
+    // spot sits between the strikes around it (the ladder runs high to low); hidden when it's outside the window
+    const j = view.findIndex((r) => r.strike <= spot)
+    const inside = spot <= view[0].strike && spot >= view[view.length - 1].strike
+    const spotY = !inside ? null : j <= 0 ? sy(0) : sy(j - 1) + ((view[j - 1].strike - spot) / (view[j - 1].strike - view[j].strike)) * band
     const every = Math.max(1, Math.ceil(14 / band))
-    return { mid, sx, band, sy, spotY, every, ticks }
-  }, [ladder, spot, w, h])
+    // the overview strip
+    const sTop = pad.top
+    const sH = h - pad.top - pad.bottom
+    const sX = w - STRIP - 6
+    const sBand = sH / n
+    const mostAll = Math.max(1, ...ladder.map((r) => Math.max(r.calls, r.puts)))
+    const sMid = sX + STRIP / 2
+    const sw = (v: number) => (v / mostAll) * (STRIP / 2 - 2)
+    return { mid, sx, band, sy, spotY, every, ticks, sTop, sH, sX, sBand, sMid, sw }
+  }, [view, ladder, n, spot, w, h])
 
-  const r = hover != null ? ladder[hover] : null
+  // the window never gets shorter than about 36px, so its three grips stay apart
+  const minN = Math.min(n, Math.max(2, geo ? Math.ceil(36 / geo.sBand) : 2))
+  const setFromIndex = (a: number, b: number) => {
+    a = Math.max(0, Math.min(n - minN, Math.round(a)))
+    b = Math.max(a + minN, Math.min(n, Math.round(b)))
+    setWin(a === 0 && b === n ? null : { top: ladder[a].strike, bottom: ladder[b - 1].strike })
+  }
+  // measured from the svg's top, not the strip group's, whose box grows with the grips' hit areas
+  const stripIndex = (e: React.PointerEvent<SVGGElement>) =>
+    geo ? (e.clientY - e.currentTarget.ownerSVGElement!.getBoundingClientRect().top - geo.sTop) / geo.sBand : 0
+
+  const r = hover != null ? view[hover] : null
   return (
     <div ref={ref} className="relative h-full w-full select-none">
       {geo && (
-        <svg width={w} height={h} role="img" aria-label={ariaLabel} className="block"
-          onMouseMove={(e) => {
-            const i = Math.floor((e.clientY - e.currentTarget.getBoundingClientRect().top - pad.top) / geo.band)
-            setHover(i >= 0 && i < ladder.length ? i : null)
-          }}
-          onMouseLeave={() => setHover(null)}>
-          <line x1={geo.mid} x2={geo.mid} y1={pad.top} y2={h - pad.bottom} stroke="rgb(255 255 255 / 0.22)" />
-          {[...geo.ticks.map((v) => -v), 0, ...geo.ticks].map((v) => (
-            <text key={v} x={geo.mid + (v < 0 ? -geo.sx(-v) : geo.sx(v))} y={h - 9} textAnchor="middle" className="num fill-ink-3 text-[11px]">
-              {format(Math.abs(v))}
-            </text>
-          ))}
-          {ladder.map((row, i) => {
-            const bh = Math.max(1, geo.band * 0.7)
-            const y = geo.sy(i) - bh / 2
-            return (
-              <g key={row.strike} opacity={hover == null || hover === i ? 1 : 0.55}>
-                {row.calls > 0 && <rect x={geo.mid} y={y} width={geo.sx(row.calls)} height={bh} fill="var(--color-pos)" opacity={0.8} />}
-                {row.puts > 0 && <rect x={geo.mid - geo.sx(row.puts)} y={y} width={geo.sx(row.puts)} height={bh} fill="var(--color-neg)" opacity={0.8} />}
-                {i % geo.every === 0 && (
-                  <text x={pad.left - 10} y={geo.sy(i)} dy="0.32em" textAnchor="end" className="num fill-ink-3 text-[11px]">{row.strike}</text>
-                )}
+        <svg width={w} height={h} role="img" aria-label={ariaLabel} className="block">
+          <g onMouseMove={(e) => {
+            const i = Math.floor((e.clientY - e.currentTarget.ownerSVGElement!.getBoundingClientRect().top - pad.top) / geo.band)
+            setHover(i >= 0 && i < view.length ? i : null)
+          }} onMouseLeave={() => setHover(null)}>
+            <rect x={0} y={pad.top} width={w - pad.right} height={h - pad.top - pad.bottom} fill="transparent" />
+            <line x1={geo.mid} x2={geo.mid} y1={pad.top} y2={h - pad.bottom} stroke="rgb(255 255 255 / 0.22)" />
+            {[...geo.ticks.map((v) => -v), 0, ...geo.ticks].map((v) => (
+              <text key={v} x={geo.mid + (v < 0 ? -geo.sx(-v) : geo.sx(v))} y={h - 9} textAnchor="middle" className="num fill-ink-3 text-[11px]">
+                {format(Math.abs(v))}
+              </text>
+            ))}
+            {view.map((row, i) => {
+              const bh = Math.max(1, geo.band * 0.7)
+              const y = geo.sy(i) - bh / 2
+              return (
+                <g key={row.strike} opacity={hover == null || hover === i ? 1 : 0.55}>
+                  {row.calls > 0 && <rect x={geo.mid} y={y} width={geo.sx(row.calls)} height={bh} fill="var(--color-pos)" opacity={0.8} />}
+                  {row.puts > 0 && <rect x={geo.mid - geo.sx(row.puts)} y={y} width={geo.sx(row.puts)} height={bh} fill="var(--color-neg)" opacity={0.8} />}
+                  {i % geo.every === 0 && (
+                    <text x={pad.left - 10} y={geo.sy(i)} dy="0.32em" textAnchor="end" className="num fill-ink-3 text-[11px]">{row.strike}</text>
+                  )}
+                </g>
+              )
+            })}
+            {geo.spotY != null && <>
+              <line x1={pad.left} x2={w - pad.right} y1={geo.spotY} y2={geo.spotY} stroke="rgb(255 255 255 / 0.6)" strokeDasharray="4 4" />
+              <text x={w - pad.right} y={geo.spotY - 5} textAnchor="end" className="fill-ink-2 text-[10px]">spot {spot.toFixed(2)}</text>
+            </>}
+            <text x={pad.left} y={pad.top + 2} dy="0.7em" className="fill-ink-3 text-[10px]">Puts</text>
+            <text x={w - pad.right} y={pad.top + 2} dy="0.7em" textAnchor="end" className="fill-ink-3 text-[10px]">Calls</text>
+          </g>
+
+          <g style={{ touchAction: 'none' }} aria-label="Strike range: drag to zoom, double-click to show all"
+            onPointerDown={(e) => {
+              e.preventDefault()
+              const i = stripIndex(e)
+              const edge = 7 / geo.sBand
+              // only the three grips do anything: the top edge, the bottom edge and the line across the middle
+              const mode = Math.abs(i - i0) <= edge ? 'top' : Math.abs(i - i1) <= edge ? 'bottom' : Math.abs(i - (i0 + i1) / 2) <= edge ? 'move' : null
+              if (!mode) return
+              drag.current = { mode, y0: i, i0, i1 }
+              e.currentTarget.setPointerCapture(e.pointerId)
+            }}
+            onPointerMove={(e) => {
+              const d = drag.current
+              if (!d) return
+              const i = stripIndex(e)
+              if (d.mode === 'move') {
+                const size = d.i1 - d.i0
+                const a = Math.max(0, Math.min(n - size, d.i0 + i - d.y0))
+                setFromIndex(a, a + size)
+              } else if (d.mode === 'top') setFromIndex(Math.min(i, d.i1 - minN), d.i1)
+              else setFromIndex(d.i0, Math.max(i, d.i0 + minN))
+            }}
+            onPointerUp={() => { drag.current = null }}
+            onDoubleClick={() => setWin(null)}>
+            <title>Drag the top or bottom edge to zoom, the middle line to move; double-click to show all</title>
+            <rect x={geo.sX} y={geo.sTop} width={STRIP} height={geo.sH} rx={4} fill="rgb(255 255 255 / 0.03)" stroke="rgb(255 255 255 / 0.1)" />
+            {ladder.map((row, i) => {
+              const y = geo.sTop + geo.sBand * i
+              const bh = Math.max(0.6, geo.sBand * 0.8)
+              return (
+                <g key={row.strike}>
+                  {row.calls > 0 && <rect x={geo.sMid} y={y} width={geo.sw(row.calls)} height={bh} fill="var(--color-pos)" opacity={0.6} />}
+                  {row.puts > 0 && <rect x={geo.sMid - geo.sw(row.puts)} y={y} width={geo.sw(row.puts)} height={bh} fill="var(--color-neg)" opacity={0.6} />}
+                </g>
+              )
+            })}
+            {zoomed && <>
+              <rect x={geo.sX} y={geo.sTop} width={STRIP} height={geo.sBand * i0} fill="rgb(0 0 0 / 0.55)" />
+              <rect x={geo.sX} y={geo.sTop + geo.sBand * i1} width={STRIP} height={geo.sBand * (n - i1)} fill="rgb(0 0 0 / 0.55)" />
+            </>}
+            <rect x={geo.sX + 0.5} y={geo.sTop + geo.sBand * i0} width={STRIP - 1} height={geo.sBand * (i1 - i0)} rx={3}
+              fill="rgb(255 255 255 / 0.05)" stroke="rgb(255 255 255 / 0.45)" />
+            {/* the grips, each with a taller invisible hit area */}
+            {[i0, i1].map((i, k) => (
+              <g key={k} className="cursor-ns-resize">
+                <rect x={geo.sX} y={geo.sTop + geo.sBand * i - 7} width={STRIP} height={14} fill="transparent" />
+                <rect x={geo.sMid - 9} y={geo.sTop + geo.sBand * i - 2} width={18} height={4} rx={2} fill="#ececea" />
               </g>
-            )
-          })}
-          <line x1={pad.left} x2={w - pad.right} y1={geo.spotY} y2={geo.spotY} stroke="rgb(255 255 255 / 0.6)" strokeDasharray="4 4" />
-          <text x={w - pad.right} y={geo.spotY - 5} textAnchor="end" className="fill-ink-2 text-[10px]">spot {spot.toFixed(2)}</text>
-          <text x={pad.left} y={pad.top + 2} dy="0.7em" className="fill-ink-3 text-[10px]">Puts</text>
-          <text x={w - pad.right} y={pad.top + 2} dy="0.7em" textAnchor="end" className="fill-ink-3 text-[10px]">Calls</text>
+            ))}
+            <g className="cursor-grab active:cursor-grabbing">
+              <rect x={geo.sX} y={geo.sTop + geo.sBand * (i0 + i1) / 2 - 7} width={STRIP} height={14} fill="transparent" />
+              <line x1={geo.sX + 4} x2={geo.sX + STRIP - 4} y1={geo.sTop + geo.sBand * (i0 + i1) / 2} y2={geo.sTop + geo.sBand * (i0 + i1) / 2}
+                stroke="#ececea" strokeOpacity={0.8} strokeWidth={1} />
+            </g>
+          </g>
         </svg>
       )}
       {geo && r && (

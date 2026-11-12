@@ -13,7 +13,7 @@ const ivAxis = (v: number) => `${(v * 100).toFixed(0)}`
 const pts = (v: number) => `${v > 0 ? '+' : v < 0 ? MINUS : ''}${Math.abs(v).toFixed(2)}`
 const pctSigned = (v: number) => `${v > 0 ? '+' : v < 0 ? MINUS : ''}${Math.abs(v * 100).toFixed(1)}%`
 const intFmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
-const count = (v: number) => (v >= 10_000 ? `${(v / 1000).toFixed(v >= 100_000 ? 0 : 1)}k` : intFmt.format(v))
+const count = (v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e8 ? 0 : 2)}M` : v >= 10_000 ? `${(v / 1000).toFixed(v >= 100_000 ? 0 : 1)}k` : intFmt.format(v))
 function usd(v: number): string {
   const a = Math.abs(v)
   const s = a >= 1e9 ? `${(a / 1e9).toFixed(2)}B` : a >= 1e6 ? `${(a / 1e6).toFixed(2)}M` : a >= 1e3 ? `${(a / 1e3).toFixed(0)}k` : a.toFixed(0)
@@ -39,7 +39,7 @@ function median(xs: number[]): number | null {
 function Card({ title, reading, info, controls, legend, children, foot, tall = false }: {
   tall?: boolean
   title: string
-  reading: ReactNode
+  reading?: ReactNode
   info?: ReactNode
   controls?: ReactNode
   legend?: ReactNode
@@ -64,7 +64,7 @@ function Card({ title, reading, info, controls, legend, children, foot, tall = f
               </div>
             )}
           </div>
-          <p className="mt-1 max-w-[62ch] text-[13px] leading-snug text-ink-2">{reading}</p>
+          {reading && <p className="mt-1 max-w-[62ch] text-[13px] leading-snug text-ink-2">{reading}</p>}
         </div>
         <div className="flex items-center gap-2">
           {controls}
@@ -215,40 +215,19 @@ type SortKey = 'traded' | 'expiry' | 'strike' | 'volume' | 'prev' | 'new' | 'oi'
 const TOP = 5
 const METRICS: { value: Metric; label: string }[] = [{ value: 'volume', label: 'Volume' }, { value: 'premium', label: 'Premium' }, { value: 'oi', label: 'Open interest' }]
 
-function NumInput({ label, value, onChange, step }: { label: string; value: number | ''; onChange: (v: number | '') => void; step?: number }) {
-  return (
-    <label className="flex flex-col gap-1 text-[11px] text-ink-3">
-      {label}
-      <input type="number" inputMode="decimal" step={step} value={value} onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
-        className="num h-8 w-28 rounded-[var(--radius-md)] border border-line bg-bg px-2 text-[13px] text-ink outline-none focus:border-line-strong" />
-    </label>
-  )
-}
-
 function Flow({ v }: { v: Vol }) {
   const f = v.flow
-  const [expiries, setExpiries] = useState<Set<string>>(() => new Set(f.expiries))
-  const [right, setRight] = useState<'all' | 'C' | 'P'>('all')
-  const [lo, setLo] = useState<number | ''>(() => Math.floor(v.spot * 0.9))
-  const [hi, setHi] = useState<number | ''>(() => Math.ceil(v.spot * 1.1))
-  const [unusual, setUnusual] = useState(false)
   const traded = f.rows.some((r) => r.volume > 0)
   const [metric, setMetric] = useState<Metric>(traded ? 'volume' : 'oi')
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'traded', dir: -1 })
   const [all, setAll] = useState(false)
-  // a new ticker brings its own expiries and strikes
+  // a new ticker starts on volume, or open interest before anything trades
   useEffect(() => {
-    setExpiries(new Set(f.expiries))
-    setLo(Math.floor(v.spot * 0.9))
-    setHi(Math.ceil(v.spot * 1.1))
     setMetric(f.rows.some((r) => r.volume > 0) ? 'volume' : 'oi')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [v.symbol])
 
-  const rows = useMemo(() => f.rows.filter((r) =>
-    expiries.has(r.expiry) && (right === 'all' || r.right === right)
-    && (lo === '' || r.strike >= lo) && (hi === '' || r.strike <= hi)
-    && (!unusual || (r.oi != null && r.volume > r.oi))), [f.rows, expiries, right, lo, hi, unusual])
+  const rows = f.rows
 
   const byStrike = useMemo(() => {
     const m = new Map<number, { strike: number; calls: number; puts: number }>()
@@ -261,7 +240,6 @@ function Flow({ v }: { v: Vol }) {
     }
     return [...m.values()].sort((a, b) => a.strike - b.strike)
   }, [rows, metric])
-
 
   const value = (r: FlowRow, k: SortKey): number => k === 'expiry' ? Number(r.expiry) : k === 'ratio' ? (r.oi ? r.volume / r.oi : Infinity)
     : k === 'new' ? r.new ?? -1 : k === 'prev' ? r.prev_volume ?? -1 : (r[k as keyof FlowRow] as number | null) ?? -Infinity
@@ -293,55 +271,22 @@ function Flow({ v }: { v: Vol }) {
           <p className="mt-1 max-w-[80ch] text-[13px] text-ink-2">
             Today, across every contract read so far: calls <span className="num text-pos">{usd(f.call_premium)}</span> on {count(f.call_volume)} contracts,
             puts <span className="num text-neg">{usd(f.put_premium)}</span> on {count(f.put_volume)}.
-            {' '}Put/call premium <span className="num text-ink">{f.call_premium ? (f.put_premium / f.call_premium).toFixed(2) : '-'}</span>.
+            {' '}<span className="whitespace-nowrap">Put/call premium <span className="num text-ink">{f.call_premium ? (f.put_premium / f.call_premium).toFixed(2) : '-'}</span>.</span>
           </p>
         </div>
       </div>
 
 
-      <div className="panel flex flex-wrap items-end gap-x-5 gap-y-3 p-4">
-        <div className="flex flex-col gap-1 text-[11px] text-ink-3">
-          Expiries
-          <div className="flex flex-wrap gap-1">
-            {f.expiries.map((e) => {
-              const on = expiries.has(e)
-              return (
-                <button key={e} type="button" aria-pressed={on}
-                  onClick={() => setExpiries((s) => { const n = new Set(s); if (n.has(e)) n.delete(e); else n.add(e); return n })}
-                  className={`num h-8 rounded-[var(--radius-md)] border px-2.5 text-[12px] transition-colors ${on ? 'border-line-strong bg-surface-3 text-ink' : 'border-line text-ink-3 hover:text-ink-2'}`}>
-                  {expiryLabel(e)}
-                </button>
-              )
-            })}
-            <button type="button" onClick={() => setExpiries(new Set(expiries.size === f.expiries.length ? [] : f.expiries))}
-              className="h-8 px-2 text-[12px] text-ink-3 hover:text-ink-2">{expiries.size === f.expiries.length ? 'None' : 'All'}</button>
-          </div>
-        </div>
-        <div className="flex flex-col gap-1 text-[11px] text-ink-3">
-          Type
-          <Segmented<'all' | 'C' | 'P'> label="Calls or puts" value={right} onChange={setRight}
-            options={[{ value: 'all', label: 'Both' }, { value: 'C', label: 'Calls' }, { value: 'P', label: 'Puts' }]} />
-        </div>
-        <NumInput label="Strike from" value={lo} onChange={setLo} />
-        <NumInput label="Strike to" value={hi} onChange={setHi} />
-        <label className="flex h-8 items-center gap-2 text-[12px] text-ink-2">
-          <input type="checkbox" checked={unusual} onChange={(e) => setUnusual(e.target.checked)} className="accent-[var(--color-ink)]" />
-          Volume over open interest
-        </label>
-      </div>
-
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Card title={`${v.symbol} flow by strike`}
-          reading={<>{METRICS.find((m) => m.value === metric)!.label} per strike in the filtered contracts. Calls above the line, puts below.</>}
           controls={<Segmented<Metric> label="Measure" value={metric} onChange={setMetric} options={METRICS} />}
           legend={<Legend items={[{ label: 'Calls', value: fmtMetric(byStrike.reduce((t, r) => t + r.calls, 0)), color: 'var(--color-pos)' },
             { label: 'Puts', value: fmtMetric(byStrike.reduce((t, r) => t + r.puts, 0)), color: 'var(--color-neg)' }]} />}>
           {byStrike.some((r) => r.calls || r.puts)
-            ? <FlowBars rows={byStrike} spot={v.spot} format={fmtMetric} ariaLabel={`${v.symbol} ${metric} by strike`} />
-            : <Empty>{byStrike.length ? `No ${METRICS.find((m) => m.value === metric)!.label.toLowerCase()} in these contracts yet today.` : 'No contracts match these filters.'}</Empty>}
+            ? <FlowBars rows={byStrike} spot={v.spot} format={fmtMetric} ariaLabel={`${v.symbol} ${metric} by strike`} storageKey={`flow.strikes.${v.symbol}`} />
+            : <Empty>{byStrike.length ? `No ${METRICS.find((m) => m.value === metric)!.label.toLowerCase()} yet today.` : 'No contracts read yet.'}</Empty>}
         </Card>
         <Card title={`${v.symbol} premium through the day`}
-          reading={<>Today's call and put premium so far, read from TWS every minute while this page is open. Past sessions are in the chart below.</>}
           legend={<Legend items={[{ label: 'Call premium', value: usd(f.call_premium), color: 'var(--color-pos)' }, { label: 'Put premium', value: usd(f.put_premium), color: 'var(--color-neg)' }]} />}>
           {points.length > 1 && points.some((p) => p.call_premium || p.put_premium)
             ? <SeriesChart time format={(x) => usd(x)} ariaLabel={`${v.symbol} call and put premium today`}
@@ -444,10 +389,12 @@ function Sessions({ v }: { v: Vol }) {
     <div className="space-y-3">
       <Card tall title={`${v.symbol} flow`}
         reading={s.days.length ? <>
-          Call and put {metric} every {STEP_MIN[step]} minutes, smoothed over about {STEP_MIN[step] * STEP_SPAN[step]} minutes, with the share price in white. Over these sessions: calls <span className="num text-pos">{fmt(calls)}</span>,
+          Over {s.days.length} past {s.days.length === 1 ? 'session' : 'sessions'}: calls <span className="num text-pos">{fmt(calls)}</span>,
           puts <span className="num text-neg">{fmt(puts)}</span>{first && last ? <>, while {v.symbol} moved <span className="num text-ink">{pctSigned(last / first - 1)}</span></> : null}.
         </> : 'Reading each contract\'s trade history from TWS.'}
-        info={<p>TWS's 5-minute trade bars for every option that has traded, summed into calls and puts; 15 and 30 minutes are added up from them. Premium is each bar's volume × its volume-weighted average price × 100. The bars come from IBKR's servers whenever TWS is open, so missed sessions are filled in later (up to five back); options that expired while TWS was closed can't be. Today's bars refresh every 20 minutes in market hours.</p>}
+        info={<><p>TWS's 5-minute trade bars for every option that has traded, summed into calls and puts; 15 and 30 minutes are added up from them. Premium is each bar's volume × its volume-weighted average price × 100. The bars come from IBKR's servers whenever TWS is open, so missed sessions are filled in later (up to five back); options that expired while TWS was closed can't be. Today's bars refresh every 20 minutes in market hours.</p>
+          <p className="mt-2">{s.building ? `Updating from TWS: ${s.done} of ${s.total} contracts read.` : s.error ? `Last update failed: ${s.error}` : `Built from ${s.contracts} different options (each strike, expiry and type counted once).`}</p>
+          <p className="mt-2">Each line is call and put {metric} every {STEP_MIN[step]} minutes, smoothed over about {STEP_MIN[step] * STEP_SPAN[step]} minutes; the white line is the share price.</p></>}
         controls={<>
           <Segmented<Step> label="Interval" value={step} onChange={setStep}
             options={(['5m', '15m', '30m'] as Step[]).map((x) => ({ value: x, label: x }))} />
@@ -455,8 +402,7 @@ function Sessions({ v }: { v: Vol }) {
             options={[{ value: 'premium', label: 'Premium' }, { value: 'volume', label: 'Volume' }]} />
         </>}
         legend={<Legend items={[{ label: 'Calls', value: fmt(calls), color: 'var(--color-pos)' }, { label: 'Puts', value: fmt(puts), color: 'var(--color-neg)' },
-          { label: `${v.symbol} price`, value: last?.toFixed(2), color: '#ececea' }]} />}
-        foot={s.building ? `Updating from TWS: ${s.done} of ${s.total} contracts read.` : s.error ? `Last update failed: ${s.error}` : `From TWS's 5-minute trade bars of ${s.contracts} different options (each strike, expiry and type counted once); premium is each bar's volume × its average traded price × 100. Today's bars refresh every 20 minutes in market hours.`}>
+          { label: `${v.symbol} price`, value: last?.toFixed(2), color: '#ececea' }]} />}>
         {bars.length
           ? <SessionFlowChart bars={bars} span={STEP_SPAN[step]} format={fmt} priceFormat={(x) => x.toFixed(2)} ariaLabel={`${v.symbol} call and put ${metric} over the past sessions`} />
           : <Empty>{s.building ? `Reading each contract's 5-minute trade history from TWS: ${s.done} of ${s.total}. The first time takes a few minutes.` : s.error ? `Couldn't read the trade history: ${s.error}` : 'Starts reading the trade history within a few seconds.'}</Empty>}
