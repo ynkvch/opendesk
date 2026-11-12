@@ -265,7 +265,7 @@ def costs() -> dict:
 
 
 TRADING_DAYS = 252
-MIN_RETURNS = 20  # fewer daily returns than this and the ratios are noise, so they show as blank
+MIN_RETURNS = 5  # fewer daily returns than this and the ratios can't be worked out; short windows are noisy
 
 
 def _risk_free(first: str, last: str) -> float:
@@ -282,13 +282,14 @@ def _risk_free(first: str, last: str) -> float:
     return bs.RATE
 
 
-def _portfolio_stats() -> dict:
+def _portfolio_stats(since: str | None = None) -> dict:
     """sharpe, max drawdown, and beta and alpha against spy, from daily account values. deposits and withdrawals
-    are taken out of each day's change so moving cash is not counted as a gain or a loss."""
-    days = account()
+    are taken out of each day's change so moving cash is not counted as a gain or a loss. since (YYYY-MM-DD) limits
+    them to the dashboard's time range: that day's close is the starting point."""
+    days = [d for d in account() if not since or d["date"] >= since]
     flows: dict[str, float] = {}
     for c in _rows("SELECT date, amount_base FROM cash_transactions WHERE type = 'Deposits/Withdrawals' AND date >= ?",
-                   (_start()[:10],)):
+                   (max(_start()[:10], since or ""),)):
         flows[c["date"]] = flows.get(c["date"], 0.0) + c["amount_base"]
     acct, spy = [], []
     for prev, cur in zip(days, days[1:]):
@@ -330,7 +331,9 @@ def _portfolio_stats() -> dict:
 
 
 @app.get("/api/summary")
-def summary() -> dict:
+def summary(since: str | None = None) -> dict:
+    """closed-trade and account stats. since (YYYY-MM-DD, the dashboard's time range) keeps the trades closed after
+    that day and the account values from it on."""
     start = _start()
     closed = _rows("SELECT * FROM trades WHERE status = 'closed' AND opened_at > ?", (start,))
     open_n = _rows("SELECT COUNT(*) n FROM trades WHERE status = 'open' AND opened_at > ?", (start,))[0]["n"]
@@ -386,7 +389,7 @@ def summary() -> dict:
             "pct_of_premium": f["fees"] / f["premium"] if f["premium"] else None,
             "pct_of_gross_wins": f["fees"] / gross_wins if gross_wins else None,
         },
-        **_portfolio_stats(),
+        **_portfolio_stats(since),
         "by_strategy": group("strategy"),
         "by_underlying": group("underlying"),
     }
@@ -405,3 +408,5 @@ if DIST.exists():
         # index.html names the current hashed bundle; without this header browsers reuse a cached copy after a
         # rebuild and keep loading the old UI. The hashed files under /assets can stay cached.
         return FileResponse(DIST / "index.html", headers={"Cache-Control": "no-cache"})
+    if since:
+        closed = [t for t in closed if t["closed_at"] and t["closed_at"][:10] > since]

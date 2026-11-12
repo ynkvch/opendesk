@@ -5,7 +5,7 @@ import type { AccountDay } from '../lib/api'
 import { date, dateYear, money, pct, signedMoney, tone } from '../lib/format'
 import { Heading, Segmented } from './ui'
 
-type Range = '1W' | 'MTD' | '1M' | '3M' | 'YTD' | 'ALL'
+export type Range = '1W' | 'MTD' | '1M' | '3M' | 'YTD' | 'ALL'
 const RANGES: { value: Range; label: string }[] = [
   { value: '1W', label: '1W' },
   { value: 'MTD', label: 'MTD' },
@@ -28,7 +28,7 @@ function windowStart(range: Range, last: string): string | null {
 }
 
 /** Days in the window plus the prior close, which is the baseline for returns and the first bar. */
-function slice(days: AccountDay[], range: Range): AccountDay[] {
+export function slice(days: AccountDay[], range: Range): AccountDay[] {
   const last = days[days.length - 1]?.date
   const from = last ? windowStart(range, last) : null
   if (!from) return days
@@ -43,8 +43,8 @@ const compact = (v: number) =>
 
 type Unit = 'pct' | 'usd'
 
-export function AccountPanel({ days }: { days: AccountDay[] }) {
-  const [range, setRange] = useState<Range>('ALL')
+/** the time range is the dashboard's, so the stats beside this panel follow it. */
+export function AccountPanel({ days, range, onRange: setRange }: { days: AccountDay[]; range: Range; onRange: (r: Range) => void }) {
   const [unit, setUnit] = useState<Unit>('pct')
 
   const view = useMemo(() => slice(days, range), [days, range])

@@ -17,7 +17,8 @@ export function StatsPanel({ s }: { s: Summary }) {
 
       <dl className="mt-5 divide-y divide-line border-t border-line">
         <Stat label="Sharpe ratio" value={num(s.sharpe, 2)} />
-        <Stat label="Profit factor" value={num(s.profit_factor, 2)} />
+        <Stat label="Profit factor" value={s.profit_factor == null && s.closed_trades > 0 && s.avg_loss == null ? '∞' : num(s.profit_factor, 2)}
+          sub={s.profit_factor == null && s.closed_trades > 0 && s.avg_loss == null ? 'no losing trades' : undefined} />
         <Stat label="Max drawdown" value={pct(s.max_drawdown, 1)} valueClass={s.max_drawdown ? 'text-neg' : 'text-ink'} />
         <Stat label="Beta vs SPY" value={num(s.beta, 2)} />
         <Stat label="Alpha vs SPY" value={pct(s.alpha, 1, true)} valueClass={tone(s.alpha)} sub="annualized" />
@@ -27,7 +28,7 @@ export function StatsPanel({ s }: { s: Summary }) {
           value={<><span className="text-neg">{money(s.avg_mae)}</span><span className="text-ink-3"> / </span><span className="text-pos">{money(s.avg_mfe)}</span></>} />
       </dl>
       {s.sharpe == null && (
-        <p className="mt-3 text-xs text-ink-3">Sharpe, drawdown, beta and alpha need 20 days of account history.</p>
+        <p className="mt-3 text-xs text-ink-3">Sharpe, drawdown, beta and alpha need 5 days of account history.</p>
       )}
     </section>
   )

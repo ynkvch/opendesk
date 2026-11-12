@@ -188,7 +188,8 @@ export const api = {
   trades: () => get<TradeRow[]>('/api/trades'),
   trade: (id: number) => get<TradeDetail>(`/api/trades/${id}`),
   theta: (id: number) => get<Theta>(`/api/trades/${id}/theta`),
-  summary: () => get<Summary>('/api/summary'),
+  /** since (YYYY-MM-DD) limits the stats to a time range; without it they cover everything */
+  summary: (since?: string) => get<Summary>(`/api/summary${since ? `?since=${since}` : ''}`),
   account: () => get<AccountDay[]>('/api/account'),
   costs: () => get<Costs>('/api/costs'),
   saveNotes: async (id: number, notes: { thesis?: string; post_mortem?: string }) => {
