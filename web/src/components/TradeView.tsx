@@ -1,5 +1,5 @@
 import { CaretLeft, CaretRight, X } from '@phosphor-icons/react'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type TextareaHTMLAttributes } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type TextareaHTMLAttributes } from 'react'
 import { DecayChart } from '../charts/DecayChart'
 import { PayoffChart } from '../charts/PayoffChart'
 import { RiskHeatmap } from './RiskHeatmap'
@@ -551,12 +551,30 @@ function GreekRow({ label, a, b, d, hint }: { label: string; a: number; b: numbe
 /** A textarea that grows to fit its text; `rows` sets the minimum height. */
 function GrowingTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   const ref = useRef<HTMLTextAreaElement>(null)
-  useLayoutEffect(() => {
+  // the box is at least as tall as its text (min-height), and flex-1 lets it also fill a card stretched by its
+  // neighbour, so thesis and post-mortem stay the same height. the text is measured with flex switched off for a
+  // moment, otherwise the stretched height would be read back as the text's and never shrink
+  const fit = useCallback(() => {
     const el = ref.current
     if (!el) return
+    el.style.flex = 'none'
     el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`
-  }, [props.value])
+    el.style.minHeight = '0px'
+    const h = el.scrollHeight + el.offsetHeight - el.clientHeight
+    el.style.flex = ''
+    el.style.height = ''
+    el.style.minHeight = `${h}px`
+  }, [])
+  useLayoutEffect(fit, [props.value, fit])
+  // text wraps differently when the card gets wider or narrower
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let width = el.clientWidth
+    const ro = new ResizeObserver(() => { if (el.clientWidth !== width) { width = el.clientWidth; fit() } })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [fit])
   return <textarea ref={ref} {...props} />
 }
 
