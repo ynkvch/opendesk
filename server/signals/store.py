@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS sector_daily (
     PRIMARY KEY (symbol, date)
 );
 
+-- Settings made on the page, such as the regime score formula, kept as JSON by key.
+CREATE TABLE IF NOT EXISTS settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id          INTEGER PRIMARY KEY,
     source      TEXT NOT NULL,

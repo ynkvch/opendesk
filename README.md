@@ -13,7 +13,9 @@ account (Interactive Brokers today) and uses your own data keys. There is no sub
 - **Account.** Net liquidation value against the same money in SPY, Sharpe ratio, max drawdown, beta and alpha
   against SPY, profit factor, expectancy, and everything trading has cost you, for any range from a week to all time.
 - **Macro regime.** Six signals (yield curve, credit spreads, Fed balance sheet and Treasury cash, ISM, VIX),
-  each read with its own rule, routed to the sectors and options approach each regime favours.
+  each read with its own rule, routed to the sectors and options approach each regime favours. A risk score
+  combines them with a formula you set from the gear on the score card: which signals count and in what order,
+  their weights, and the risk-on and risk-off band.
 - **Sector rotation.** The 11 sector ETFs on a relative rotation graph against SPY or QQQ.
 - **Flow and volatility.** Any ticker's option chain from TWS, read every minute: call and put premium today
   across the whole chain, flow by strike with a zoomable strike range, the last five sessions of flow against the share price, the most traded
@@ -30,7 +32,7 @@ opendesk is early. These are next, in roughly this order:
   sweep orders, volume against open interest, and alerts when premium piles into one side.
 - **Deeper volatility analytics.** Full IV surfaces, expected moves and earnings moves, the volatility cone,
   risk reversals and butterflies, spot-vol beta, and dealer gamma exposure.
-- **Customisable regime.** Choose your own indicators, rules and weights for the regime score.
+- **Customisable regime.** Add your own indicators and write your own rule for each one.
 - **More brokers and data sources,** each connected with your own API keys.
 
 Ideas and contributions are welcome: open an issue.

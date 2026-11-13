@@ -438,7 +438,7 @@ def evaluate(conn) -> dict:
     # page order, two per row: curves, credit, liquidity beside VIX, then the two ISMs
     signals = [*_curve(conn), *_credit(conn, vix), _liquidity(conn), _vix_signal(conn, vix), *_ism_signals(conn)]
     votes = {k: [s["key"] for s in signals if k in s["points_to"]] for k in REGIMES}
-    return {"signals": signals, "votes": votes, "regimes": REGIMES, "score": _score(signals)}
+    return {"signals": signals, "votes": votes, "regimes": REGIMES, "score": _score(signals, load_formula(conn))}
 
 
 # the five signals. each pair is one signal; its halves are averaged.
@@ -453,20 +453,91 @@ TONE_POINTS = {"pos": 1.0, "ink": 0.0, "warn": -0.5, "neg": -1.0}
 SCORE_BAND = 30
 
 
-def _score(signals: list[dict]) -> dict:
+FORMULA_KEY = "regime_formula"
+DEFAULT_FORMULA = {
+    "parts": [{"key": key, "on": True, "weight": 1.0, "members": {k: True for k, _ in members}}
+              for key, _, members in FAMILIES],
+    "band": SCORE_BAND,
+}
+
+
+def _num(v, lo: float, hi: float, fallback: float) -> float:
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return fallback
+    return fallback if x != x else min(hi, max(lo, x))
+
+
+def normalize_formula(f) -> dict:
+    """a formula made safe to use: known signals only, in the order given, with any missing ones added at the end
+    as they are by default; weights 0..5, band 1..100."""
+    f = f if isinstance(f, dict) else {}
+    defaults = {p["key"]: p for p in DEFAULT_FORMULA["parts"]}
+    parts, seen = [], set()
+    for p in f.get("parts") or []:
+        if not isinstance(p, dict) or p.get("key") not in defaults or p["key"] in seen:
+            continue
+        d = defaults[p["key"]]
+        members = p.get("members") if isinstance(p.get("members"), dict) else {}
+        parts.append({"key": d["key"], "on": bool(p.get("on", True)), "weight": _num(p.get("weight"), 0, 5, 1.0),
+                      "members": {k: bool(members.get(k, True)) for k in d["members"]}})
+        seen.add(d["key"])
+    parts += [dict(d, members=dict(d["members"])) for k, d in defaults.items() if k not in seen]
+    return {"parts": parts, "band": _num(f.get("band"), 1, 100, SCORE_BAND)}
+
+
+def load_formula(conn) -> dict:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (FORMULA_KEY,)).fetchone()
+    try:
+        return normalize_formula(json.loads(row[0]) if row else None)
+    except ValueError:
+        return normalize_formula(None)
+
+
+def save_formula(conn, f) -> dict:
+    """stores the formula, or the default when f is None, and moves the tracked score label to the new result
+    without a notification, since the change came from the page and not from the data."""
+    if f is None:
+        conn.execute("DELETE FROM settings WHERE key = ?", (FORMULA_KEY,))
+    else:
+        conn.execute("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE"
+                     " SET value = excluded.value, updated_at = excluded.updated_at",
+                     (FORMULA_KEY, json.dumps(normalize_formula(f)), now()))
+    conn.commit()
+    result = evaluate(conn)
+    _record_changes(conn, [{"key": "score", "title": "Regime score", "reading": result["score"]["label"]}])
+    return result
+
+
+def _score(signals: list[dict], formula: dict | None = None) -> dict:
     """a mechanical risk score. each reading scores its colour (green +1, grey 0, amber -0.5, red -1); a pair's
-    two readings are averaged into one signal; the five signals are weighted equally and scaled to -100..+100.
-    +30 or more is risk-on, -30 or less risk-off, between is neutral. readings not available yet are left out of
-    their average."""
+    readings are averaged into one signal; the signals are combined as a weighted average and scaled to -100..+100.
+    +band or more is risk-on, -band or less risk-off, between is neutral. the formula (which signals and pair
+    members count, their weights and order, and the band) is set on the page; readings not available yet are left
+    out of their average."""
+    f = formula or normalize_formula(None)
+    titles = {key: (title, members) for key, title, members in FAMILIES}
     by_key = {s["key"]: s for s in signals}
+    families = [{"key": key, "title": title, "members": [{"key": k, "label": label} for k, label in members]}
+                for key, title, members in FAMILIES]
     parts = []
-    for key, title, members in FAMILIES:
+    for p in f["parts"]:
+        title, members = titles[p["key"]]
+        if not p["on"] or p["weight"] <= 0:
+            continue
         got = [{"key": k, "label": label, "reading": by_key[k]["reading"], "points": TONE_POINTS[by_key[k]["tone"]]}
-               for k, label in members if k in by_key and by_key[k]["reading"] is not None]
+               for k, label in members
+               if p["members"].get(k, True) and k in by_key and by_key[k]["reading"] is not None]
         if got:
-            parts.append({"key": key, "title": title, "points": sum(m["points"] for m in got) / len(got), "members": got})
+            parts.append({"key": p["key"], "title": title, "weight": p["weight"],
+                          "points": sum(m["points"] for m in got) / len(got), "members": got})
+    band = f["band"]
+    total = sum(p["weight"] for p in parts)
     if not parts:
-        return {"value": None, "label": None, "parts": [], "band": SCORE_BAND}
-    value = round(sum(p["points"] for p in parts) / len(parts) * 100)
-    label = "Risk-on" if value >= SCORE_BAND else "Risk-off" if value <= -SCORE_BAND else "Neutral"
-    return {"value": value, "label": label, "parts": parts, "band": SCORE_BAND}
+        return {"value": None, "label": None, "parts": [], "band": band, "formula": f, "families": families}
+    for p in parts:
+        p["contribution"] = p["weight"] * p["points"] / total * 100
+    value = round(sum(p["contribution"] for p in parts))
+    label = "Risk-on" if value >= band else "Risk-off" if value <= -band else "Neutral"
+    return {"value": value, "label": label, "parts": parts, "band": band, "formula": f, "families": families}

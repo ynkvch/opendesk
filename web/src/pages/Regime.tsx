@@ -2,7 +2,9 @@ import { Info } from '@phosphor-icons/react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RegimeChart, lineColor } from '../charts/RegimeChart'
 import { ExpandButton, ExpandOverlay, cardClass, useExpand } from '../components/Expand'
+import { FormulaEditor } from '../components/FormulaEditor'
 import { RegimeHeader } from '../components/RegimeHeader'
+import { Settings } from '../components/Settings'
 import { ErrorNote, Segmented, Skeleton } from '../components/ui'
 import { ago, date, dateTime } from '../lib/format'
 import { regimeApi, type Regime, type RegimeKey, type RegimeSignal, type RegimeUnit } from '../lib/regime'
@@ -177,7 +179,7 @@ function SignalsView({ path }: { path: string }) {
     <>
       {header}
       {error && <ErrorNote message={error} />}
-      <ScoreBreakdown score={data.score} />
+      <ScoreBreakdown score={data.score} onSaved={(r) => { setData(r); setError(null) }} />
 
       <section aria-label="Regime signals" className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         {data.signals.map((s) => <SignalChart key={s.key} s={s} />)}
@@ -230,34 +232,48 @@ function signedNum(v: number, digits = 0) {
   return `${v > 0 ? '+' : v < 0 ? MINUS : ''}${Math.abs(v).toFixed(digits)}`
 }
 
-/** Each of the five signals, its readings and its share of the score; equal weights, so each can move it by up to 100 / n. */
-function ScoreBreakdown({ score }: { score: Regime['score'] | undefined }) {
-  if (!score || score.value == null || !score.label || !score.parts.length) return null  // also an API from before the score
+/** each signal in the formula, its readings and the points it moves the score by; the gear sets the formula. */
+function ScoreBreakdown({ score, onSaved }: { score: Regime['score'] | undefined; onSaved: (r: Regime) => void }) {
+  if (!score || !score.formula) return null  // also an api from before the score or the formula
   const n = score.parts.length
+  const weighted = score.parts.some((p) => p.weight !== 1)
   return (
     <section aria-label="How the regime score is made up" className="panel p-4">
-      <h2 className={`flex items-baseline gap-3 px-3 text-2xl font-semibold tracking-[-0.02em] ${SCORE_TEXT[score.label]}`}>
-        {score.label}
-        <span className="num text-ink-2">{signedNum(score.value)}</span>
-      </h2>
-      <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-sm)] bg-line md:grid-cols-3 xl:grid-cols-5">
-        {score.parts.map((p) => {
-          const contribution = (p.points / n) * 100
-          return (
-            <div key={p.key} className="flex flex-col bg-surface px-3 py-2.5">
-              <div className="text-[12px] text-ink-3">{p.title}</div>
-              {p.members.map((m) => (
-                <div key={m.key} className="mt-0.5 truncate text-[12px] text-ink-2" title={m.reading}>
-                  {m.label && <span className="text-ink-3">{m.label}: </span>}{m.reading}
-                </div>
-              ))}
-              <div className={`num mt-auto pt-1 text-[15px] font-semibold ${contribution > 0 ? 'text-pos' : p.points <= -1 ? 'text-neg' : contribution < 0 ? 'text-warn' : 'text-ink-3'}`}>
-                {signedNum(contribution, 1)}
-              </div>
-            </div>
-          )
-        })}
+      <div className="flex items-start justify-between gap-3">
+        <h2 className={`flex items-baseline gap-3 px-3 text-2xl font-semibold tracking-[-0.02em] ${score.label ? SCORE_TEXT[score.label] : 'text-ink-3'}`}>
+          {score.label ?? 'No score'}
+          {score.value != null && <span className="num text-ink-2">{signedNum(score.value)}</span>}
+        </h2>
+        <Settings label="Score formula">
+          <FormulaEditor score={score} onSaved={onSaved} />
+        </Settings>
       </div>
+      {n > 0 ? (
+        <div style={{ '--n': n } as React.CSSProperties}
+          className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-sm)] bg-line md:grid-cols-3 xl:[grid-template-columns:repeat(var(--n),minmax(0,1fr))]">
+          {score.parts.map((p) => {
+            const contribution = p.contribution ?? (p.points / n) * 100
+            return (
+              <div key={p.key} className="flex flex-col bg-surface px-3 py-2.5">
+                <div className="flex items-baseline justify-between gap-2 text-[12px] text-ink-3">
+                  <span>{p.title}</span>
+                  {weighted && <span className="num text-[11px]">×{+p.weight.toFixed(2)}</span>}
+                </div>
+                {p.members.map((m) => (
+                  <div key={m.key} className="mt-0.5 truncate text-[12px] text-ink-2" title={m.reading}>
+                    {m.label && <span className="text-ink-3">{m.label}: </span>}{m.reading}
+                  </div>
+                ))}
+                <div className={`num mt-auto pt-1 text-[15px] font-semibold ${contribution > 0 ? 'text-pos' : p.points <= -1 ? 'text-neg' : contribution < 0 ? 'text-warn' : 'text-ink-3'}`}>
+                  {signedNum(contribution, 1)}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <p className="mt-3 px-3 text-[12px] text-ink-3">No signal in the formula has a reading. Open the gear to add one back.</p>
+      )}
     </section>
   )
 }

@@ -3,10 +3,10 @@ import fcntl
 import threading
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 
 from . import sectors as sector_data
-from .regime import evaluate as evaluate_regime
+from .regime import evaluate as evaluate_regime, save_formula
 from .run import run_source
 from .store import DB_PATH, connect, load_config, load_keys
 
@@ -35,6 +35,22 @@ def collect_regime() -> dict:
         with connect() as conn:
             run_source(conn, "regime", load_config(), load_keys())
             return _regime(conn)
+
+
+@router.put("/regime/formula")
+def put_formula(formula: dict = Body(...)) -> dict:
+    """saves the score formula set in the page's gear menu, then returns the page data scored with it."""
+    with connect() as conn:
+        save_formula(conn, formula)
+        return _regime(conn)
+
+
+@router.delete("/regime/formula")
+def reset_formula() -> dict:
+    """goes back to the default formula: every signal, equal weights."""
+    with connect() as conn:
+        save_formula(conn, None)
+        return _regime(conn)
 
 
 def _regime(conn) -> dict:

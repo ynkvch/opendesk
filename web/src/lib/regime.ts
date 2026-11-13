@@ -30,22 +30,34 @@ export type RegimeSignal = {
   levels: { value: number; label: string }[]
 }
 
+/** how the score is made, set from the gear menu on the Macro tab. */
+export type RegimeFormula = {
+  parts: { key: string; on: boolean; weight: number; members: Record<string, boolean> }[]
+  band: number
+}
+
 export type Regime = {
   signals: RegimeSignal[]
   votes: Record<RegimeKey, string[]>
   regimes: Record<RegimeKey, string>
-  /** mechanical risk score over the five signals (pairs averaged): -100..+100; ±band splits risk-on / neutral / risk-off. */
+  /** mechanical risk score: a weighted average of the signals in the formula, -100..+100; ±band splits risk-on / neutral / risk-off. */
   score: {
     value: number | null
     label: 'Risk-on' | 'Neutral' | 'Risk-off' | null
-    /** The five signals; a pair's members are averaged into its points. */
+    /** the signals that count, in the formula's order; a pair's members are averaged into its points. */
     parts: {
       key: string
       title: string
+      weight: number
       points: number
+      /** points moved on the -100..+100 score: weight × points ÷ total weight × 100. */
+      contribution: number
       members: { key: string; label: string; reading: string; points: number }[]
     }[]
     band: number
+    formula: RegimeFormula
+    /** every signal the formula can use, with its pair members. */
+    families: { key: string; title: string; members: { key: string; label: string }[] }[]
   }
   /** The collector's latest finished run; ok is 0 when it failed, null when a key is missing. */
   last_run: { finished_at: string; ok: 0 | 1 | null; message: string } | null
@@ -62,6 +74,18 @@ export const regimeApi = {
   /** Fetches fresh data from the sources first (5–10 s), then returns the page data. */
   collect: async () => {
     const res = await fetch('/api/signals/regime/collect', { method: 'POST' })
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    return res.json() as Promise<Regime>
+  },
+  saveFormula: async (formula: RegimeFormula) => {
+    const res = await fetch('/api/signals/regime/formula', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formula),
+    })
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    return res.json() as Promise<Regime>
+  },
+  resetFormula: async () => {
+    const res = await fetch('/api/signals/regime/formula', { method: 'DELETE' })
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
     return res.json() as Promise<Regime>
   },
