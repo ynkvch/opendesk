@@ -29,7 +29,7 @@ const MINUS = '−'
 type Box = { x: number; y: number; w: number; h: number }
 const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 
-/** Sectors as dots on RS-Ratio × RS-Momentum; the hovered one shows its weekly path. Regime roles are rings around the dots. */
+/** Sectors as dots on RS-Ratio × RS-Momentum; the hovered one shows its path. Regime roles are rings around the dots. */
 export function RotationChart({ rows, roles, bench, hovered, onHover, ariaLabel }: Props) {
   const [ref, w] = useWidth<HTMLDivElement>()
   const iw = Math.max(0, w - PAD.left - PAD.right)
@@ -154,7 +154,7 @@ export function RotationChart({ rows, roles, bench, hovered, onHover, ariaLabel 
             </div>
             <div className="num mt-1">RS-Ratio {end.ratio.toFixed(1)} · Mom {end.mom.toFixed(1)}</div>
             <div className="num">β {hot.beta.toFixed(2)} vs {bench}</div>
-            <div className="mt-1 text-[11px] text-ink-3">Trail: {hot.trail.length - 1} weeks to {end.date}</div>
+            <div className="mt-1 text-[11px] text-ink-3">Trail: {hot.trail.length - 1} {hot.step === 1 ? 'sessions' : 'weeks'} to {end.date}</div>
           </div>
         )
       })()}

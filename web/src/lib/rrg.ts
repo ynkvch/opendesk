@@ -14,8 +14,9 @@ export type RrgPoint = { date: string; ratio: number; mom: number }
 export type RrgRow = {
   symbol: string
   beta: number
-  /** Weekly points, oldest first; the last is the latest close. */
+  /** Points every `step` sessions, oldest first; the last is the latest close. */
   trail: RrgPoint[]
+  step: number
   quadrant: Quadrant
   /** Sector return minus benchmark return over 20 and 60 sessions, in percentage points. */
   raw20: number
@@ -28,7 +29,7 @@ export type RrgRow = {
 const RATIO_MA = 50
 const MOM_LAG = 10
 const BETA_DAYS = 252
-const STEP = 5 // one trail point per week of sessions
+const WEEK = 5 // sessions in a week, the default spacing of trail points
 
 export const quadrantOf = (ratio: number, mom: number): Quadrant =>
   ratio >= 100 ? (mom >= 100 ? 'leading' : 'weakening') : mom >= 100 ? 'improving' : 'lagging'
@@ -57,11 +58,11 @@ function betaOf(rx: number[], ry: number[]): number {
 }
 
 /** One sector against a benchmark; null when there is not enough shared history. */
-export function rrg(sector: [string, number][], bench: [string, number][], symbol: string, weeks: number,
-  adjusted: boolean): RrgRow | null {
+export function rrg(sector: [string, number][], bench: [string, number][], symbol: string, points: number,
+  adjusted: boolean, step = WEEK): RrgRow | null {
   const { dates, x, y } = align(sector, bench)
   const last = dates.length - 1
-  if (last < RATIO_MA + MOM_LAG + STEP * weeks) return null
+  if (last < RATIO_MA + MOM_LAG + step * points) return null
   const rx = returns(x), ry = returns(y)
   const beta = betaOf(rx, ry)
 
@@ -75,13 +76,13 @@ export function rrg(sector: [string, number][], bench: [string, number][], symbo
     return i >= RATIO_MA - 1 ? (100 * v) / (sum / RATIO_MA) : null
   })
   const point = (i: number): RrgPoint => ({ date: dates[i], ratio: ratio[i]!, mom: (100 * ratio[i]!) / ratio[i - MOM_LAG]! })
-  const trail = Array.from({ length: weeks + 1 }, (_, k) => point(last - STEP * (weeks - k)))
+  const trail = Array.from({ length: points + 1 }, (_, k) => point(last - step * (points - k)))
 
   const ret = (v: number[], n: number) => v[last] / v[last - n] - 1
   const gap = (n: number, b: number) => (ret(x, n) - b * ret(y, n)) * 100
   const end = trail[trail.length - 1]
   return {
-    symbol, beta, trail, quadrant: quadrantOf(end.ratio, end.mom),
+    symbol, beta, trail, step, quadrant: quadrantOf(end.ratio, end.mom),
     raw20: gap(20, 1), raw60: gap(60, 1), adj20: gap(20, beta), adj60: gap(60, beta),
   }
 }

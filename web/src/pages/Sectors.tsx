@@ -4,6 +4,7 @@ import { RegimeChart, lineColor } from '../charts/RegimeChart'
 import { QUADRANT_COLOR, QUADRANT_LABEL, RotationChart, type Role } from '../charts/RotationChart'
 import { ExpandButton, ExpandOverlay, cardClass, useExpand } from '../components/Expand'
 import { RegimeHeader } from '../components/RegimeHeader'
+import { Setting, Settings } from '../components/Settings'
 import { ErrorNote, Segmented, Skeleton } from '../components/ui'
 import { date, dateYear } from '../lib/format'
 import { regimeApi, type Regime, type RegimeKey } from '../lib/regime'
@@ -115,11 +116,14 @@ export function SectorsView({ path }: { path: string }) {
 }
 
 type Mode = 'raw' | 'beta'
-type Trail = '1M' | '3M'
+type Trail = '1W' | '1M' | '3M'
 type RoutedRegime = Exclude<RegimeKey, 'uncertain'>
 const MODES: Mode[] = ['raw', 'beta']
-const TRAILS: Trail[] = ['1M', '3M']
-const TRAIL_WEEKS: Record<Trail, number> = { '1M': 4, '3M': 13 }
+const TRAILS: Trail[] = ['1W', '1M', '3M']
+// 1W is too short for weekly points, so it steps one session at a time
+const TRAIL_POINTS: Record<Trail, { points: number; step: number }> = {
+  '1W': { points: 5, step: 1 }, '1M': { points: 4, step: 5 }, '3M': { points: 13, step: 5 },
+}
 
 /**
  * which etfs each regime favours or avoids, following the sector cycle: growth up maps to expansion, growth down
@@ -155,7 +159,8 @@ function Rotation({ data, regime }: { data: Sectors; regime: Regime | null }) {
 
   const rows = useMemo(() => [...data.sectors, ...(data.extras ?? [])]
     .flatMap((s) => {
-      const r = rrg(data.series[s.symbol] ?? [], data.series[bench] ?? [], s.symbol, TRAIL_WEEKS[trail], mode === 'beta')
+      const r = rrg(data.series[s.symbol] ?? [], data.series[bench] ?? [], s.symbol, TRAIL_POINTS[trail].points, mode === 'beta',
+        TRAIL_POINTS[trail].step)
       return r ? [{ ...r, name: s.name }] : []
     })
     .sort((a, b) => b.trail[b.trail.length - 1].ratio - a.trail[a.trail.length - 1].ratio), [data, bench, trail, mode])
@@ -182,7 +187,7 @@ function Rotation({ data, regime }: { data: Sectors; regime: Regime | null }) {
               </button>
               <div role="tooltip"
                 className="invisible absolute left-0 top-6 z-20 w-[480px] max-w-[80vw] rounded-[var(--radius-md)] border border-line-strong bg-surface-2 p-3 text-[12px] leading-relaxed text-ink-2 opacity-0 shadow-xl transition-opacity group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
-                <p>Each dot is a sector today (GLD is gold, for comparison). Hover one to see its path, one point per week. Sectors usually move clockwise:
+                <p>Each dot is a sector today (GLD is gold, for comparison). Hover one to see its path, one point per week (per session on 1W). Sectors usually move clockwise:
                   improving → leading → weakening → lagging.</p>
                 <ul className="mt-2 list-disc space-y-0.5 pl-4">
                   <li>RS-Ratio: the sector against {bench}, divided by its own 50-day average. Right of 100 = outperforming.</li>
@@ -204,13 +209,21 @@ function Rotation({ data, regime }: { data: Sectors; regime: Regime | null }) {
             {regime ? ` (${regime.votes[regimeKey]?.length ?? 0} of ${regime.signals.length} signals)` : ' (regime data unavailable)'}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Segmented<RoutedRegime> label="Regime for rings" value={regimeKey} onChange={setPicked}
-            options={ROUTED.map((k) => ({ value: k, label: `${ROLES[k].short}${regime ? ` ${regime.votes[k]?.length ?? 0}` : ''}` }))} />
-          <Segmented<Mode> label="Relative strength" value={mode} onChange={setMode}
-            options={[{ value: 'raw', label: 'Raw' }, { value: 'beta', label: 'β-adj' }]} />
-          <Segmented<Bench> label="Benchmark" value={bench} onChange={setBench} options={BENCHES.map((b) => ({ value: b, label: b }))} />
+        <div className="flex items-center gap-2">
           <Segmented<Trail> label="Trail" value={trail} onChange={setTrail} options={TRAILS.map((t) => ({ value: t, label: t }))} />
+          <Settings>
+            <Setting label="Regime">
+              <Segmented<RoutedRegime> label="Regime" value={regimeKey} onChange={setPicked}
+                options={ROUTED.map((k) => ({ value: k, label: `${ROLES[k].short}${regime ? ` ${regime.votes[k]?.length ?? 0}` : ''}` }))} />
+            </Setting>
+            <Setting label="Relative strength">
+              <Segmented<Mode> label="Relative strength" value={mode} onChange={setMode}
+                options={[{ value: 'raw', label: 'Raw' }, { value: 'beta', label: 'β-adj' }]} />
+            </Setting>
+            <Setting label="Benchmark">
+              <Segmented<Bench> label="Benchmark" value={bench} onChange={setBench} options={BENCHES.map((b) => ({ value: b, label: b }))} />
+            </Setting>
+          </Settings>
         </div>
       </header>
 
