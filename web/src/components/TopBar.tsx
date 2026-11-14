@@ -6,6 +6,7 @@ import { navigate } from '../lib/router'
 const LINKS = [
   { href: '/', label: 'Dashboard' },
   { href: '/journal', label: 'Journal' },
+  { href: '/risk', label: 'Risk manager' },
   { href: '/regime', label: 'Regime' },
   { href: '/flow', label: 'Flow' },
 ]

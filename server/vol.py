@@ -187,8 +187,9 @@ class TwsSource:
 
     name = "tws"
 
-    def __init__(self):
+    def __init__(self, client_id: int = CLIENT_ID):
         from ib_async import IB
+        self.client_id = client_id
         self.ib = IB()
         self.errors: set[int] = set()
         self.missing: set[tuple] = set()  # (expiry, strike, right) that tws says don't exist
@@ -196,7 +197,7 @@ class TwsSource:
 
     async def __aenter__(self):
         last = None
-        for cid in (CLIENT_ID, CLIENT_ID + 1, CLIENT_ID + 2):
+        for cid in (self.client_id, self.client_id + 1, self.client_id + 2):
             try:
                 await self.ib.connectAsync("127.0.0.1", PORT, clientId=cid, readonly=True, timeout=6)
                 break

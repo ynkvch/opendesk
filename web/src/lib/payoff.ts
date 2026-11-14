@@ -1,6 +1,6 @@
 /** Option payoff maths: Black-Scholes value per leg, summed into a position P&L curve. */
 
-const RATE = 0.042
+export const RATE = 0.042
 const YEAR_MS = 365 * 86_400_000
 
 function erf(x: number): number {
@@ -76,4 +76,29 @@ export function extremes(p: Position): { maxProfit: number | null; maxLoss: numb
     maxProfit: netCalls > 0 ? null : Math.max(...probes),
     maxLoss: netCalls < 0 ? null : Math.min(...probes),
   }
+}
+
+export type Scenario = {
+  right: 'C' | 'P'
+  side: 'BUY' | 'SELL'
+  strike: number
+  spot: number
+  /** price per share paid (buy) or received (sell) */
+  entry: number
+  /** implied vol as a fraction, 0.45 = 45% */
+  iv: number
+  multiplier: number
+  quantity: number
+  /** total commissions to open and close */
+  commissions: number
+  /** expiry close, ms */
+  expiresAt: number
+}
+
+/** One option position's P&L in USD when the underlying moves `pricePct` %, iv shifts `volPts` points (floored at
+ * 5%), valued at `at` (ms). Past expiry it is worth its intrinsic value. */
+export function scenarioPnl(p: Scenario, pricePct: number, volPts: number, at: number): number {
+  const t = Math.max(0, (p.expiresAt - at) / YEAR_MS)
+  const v = bsPrice(p.right, p.spot * (1 + pricePct / 100), p.strike, t, Math.max(0.05, p.iv + volPts / 100))
+  return (p.side === 'BUY' ? 1 : -1) * (v - p.entry) * p.multiplier * p.quantity - p.commissions
 }

@@ -137,6 +137,7 @@ expiry it switches to hourly readings and theta per hour.
 | `server/journal_job.py` | Scheduled run of Flex and TWS |
 | `server/greeks_at_entry.py` | Greeks at the moment of a fill: IBKR's model next to this project's Black-Scholes |
 | `server/bs.py` | Black-Scholes price, Greeks and implied vol |
+| `server/risk.py` | The Risk manager page: expiries, strikes and one contract's quote from TWS, the account size and a commission estimate |
 | `server/vol.py` | The Flow page: reads option chains from TWS, keeps snapshots, open interest and trade bars in `data/vol.db` |
 | `server/signals/` | The Regime page's collector (`regime.py`, run by `run.py`) and the sector prices (`sectors.py`), with `config.json` for their settings |
 | `web/` | React + Vite + Tailwind UI |
@@ -162,7 +163,3 @@ launchctl load ~/Library/LaunchAgents/$job.plist
 | `com.opendesk.regime` | Collects regime data every 15 minutes on weekdays |
 
 Output goes to `data/*.log`.
-
-## Journal rules built in
-
-- Trades never get a generated thesis or post-mortem. Those fields are yours.

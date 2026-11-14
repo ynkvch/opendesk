@@ -7,6 +7,7 @@ import { navigate, useLocation, withTrade } from './lib/router'
 import { Dashboard } from './pages/Dashboard'
 import { Journal } from './pages/Journal'
 import { RegimePage } from './pages/Regime'
+import { RiskPage } from './pages/Risk'
 import { VolPage } from './pages/Vol'
 
 type Data = { trades: TradeRow[]; summary: Summary; account: AccountDay[]; costs: Costs }
@@ -41,9 +42,10 @@ export default function App() {
   const close = useCallback(() => navigate(withTrade(null)), [])
 
   const page = path === '/journal' ? 'journal'
+    : path === '/risk' || path.startsWith('/risk/') ? 'risk'
     : ['/flow', '/vol'].some((p) => path === p || path.startsWith(`${p}/`)) ? 'flow'
     : path === '/regime' || path.startsWith('/regime/') || path === '/data' || path === '/signals' ? 'regime' : 'dashboard'
-  const journalPage = page !== 'regime' && page !== 'flow'
+  const journalPage = page !== 'regime' && page !== 'flow' && page !== 'risk'
 
   return (
     <div className="min-h-[100dvh]">
@@ -53,6 +55,7 @@ export default function App() {
         {page === 'dashboard' && <h1 className="sr-only">Dashboard</h1>}
         {page === 'regime' && <RegimePage path={path} />}
         {page === 'flow' && <VolPage path={path} />}
+        {page === 'risk' && <RiskPage path={path} />}
         {journalPage && error && <ErrorNote message={error} onRetry={load} />}
         {journalPage && !data && !error && <PageSkeleton />}
         {data && page === 'dashboard' && (
