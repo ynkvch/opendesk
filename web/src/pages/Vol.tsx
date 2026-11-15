@@ -6,6 +6,7 @@ import { ErrorNote, Segmented, Skeleton } from '../components/ui'
 import { ago, dateYear } from '../lib/format'
 import { navigate } from '../lib/router'
 import { expiryLabel, volApi, type FlowRow, type Vol } from '../lib/vol'
+import { VRP_RANGES, vrpSeries, vrpStats, vrpWindow, type VrpRange } from '../lib/vrp'
 
 const MINUS = '−'
 const ivFmt = (v: number) => `${(v * 100).toFixed(1)}%`
@@ -168,42 +169,38 @@ function TermCard({ v }: { v: Vol }) {
   )
 }
 
-function ForwardCard({ v }: { v: Vol }) {
-  const f = v.forward_factor
-  const hist = v.stored.forward_factor
-  const med = median(hist.map((p) => p[1]))
-  const pct = f.value != null && hist.length > 4 ? Math.round((hist.filter((p) => p[1] < f.value!).length / hist.length) * 100) : null
+/** 30-day implied minus 30-day realized, in vol points, with its mean and one standard deviation either side. */
+function VrpCard({ v }: { v: Vol }) {
+  const [range, setRange] = useState<VrpRange>('1Y')
+  const all = useMemo(() => vrpSeries(v.history.iv, v.history.rv), [v])
+  const shown = useMemo(() => vrpWindow(all, range, new Date().toISOString().slice(0, 10)), [all, range])
+  const { now, mean, sd, z } = vrpStats(shown)
+  const first = all[0]?.[0]
+  const volPct = (x: number) => `${x < 0 ? MINUS : ''}${Math.abs(x).toFixed(1)}%`
   return (
-    <Card title={`${v.symbol} 30-60d forward factor`}
-      reading={f.value == null ? 'Needs expiries either side of 30 and 60 days.' : <>
-        The 30-day option is priced <span className="num text-ink">{Math.abs(f.value * 100).toFixed(0)}%</span>
-        {f.value < 0 ? ' below ' : ' above '}the 30-60 day window{pct != null && <>, the {ordinal(pct)} percentile of {hist.length} days stored</>}.
-        {' '}30-day implied is <span className="num text-ink">{ivFmt(f.iv30!)}</span> against <span className="num text-ink">{ivFmt(f.forward!)}</span> forward.
+    <Card title={`${v.symbol} variance risk premium`}
+      reading={now == null ? 'TWS returned no implied or realized volatility history for this ticker.' : <>
+        30-day implied is <span className="num text-ink">{Math.abs(now).toFixed(1)}</span> vol points
+        {now >= 0 ? ' over ' : ' under '}30-day realized
+        {z != null && <>, <span className="num text-ink">{Math.abs(z).toFixed(1)}</span> standard deviations {z >= 0 ? 'above' : 'below'} its {range === 'All' ? 'full-history' : range} mean</>}.
       </>}
-      info={<p>Forward vol for days 30 to 60 comes from the 30- and 60-day at-the-money vols: √((σ60²·60 − σ30²·30) / 30). The factor is σ30 ÷ forward − 1: negative = the near month is cheap against the next. History builds from this dashboard's daily snapshots.</p>}
+      info={<>
+        <p>TWS's 30-day implied volatility for the ticker minus its 30-day realized volatility from daily closes, in vol points.
+          Above zero: options are priced for bigger moves than the stock has been making, so selling premium has an edge.
+          Below zero: options are cheap against recent moves.</p>
+        <p className="mt-2">Dashed lines: the mean over the range and one standard deviation either side.{first && <> TWS history for {v.symbol} starts {dateYear(first)}.</>}</p>
+      </>}
+      controls={<Segmented<VrpRange> label="Range" value={range} onChange={setRange} options={VRP_RANGES.map((r) => ({ value: r, label: r }))} />}
       legend={<Legend items={[
-        { label: '30-60d forward factor', value: f.value != null ? pctSigned(f.value) : '-', color: VOL_COLORS[0] },
-        ...(med != null ? [{ label: 'Median', value: pctSigned(med), color: 'rgb(255 255 255 / 0.7)', dashed: true }] : []),
+        { label: 'Current', value: now != null ? <span className={now < 0 ? 'text-neg' : 'text-pos'}>{volPct(now)}</span> : '-', color: VOL_COLORS[0] },
+        ...(mean != null ? [{ label: 'Mean', value: volPct(mean), color: 'rgb(255 255 255 / 0.7)', dashed: true }] : []),
+        ...(sd != null ? [{ label: 'Std. dev.', value: `${sd.toFixed(1)}%`, color: 'rgb(255 255 255 / 0.7)', dashed: true }] : []),
       ]} />}>
-      {hist.length > 1
-        ? <SeriesChart series={[{ label: 'Forward factor', points: hist, color: VOL_COLORS[0] }]} levels={med != null ? [{ value: med, label: 'Median' }] : []}
-            format={(x) => `${(x * 100).toFixed(0)}`} ariaLabel={`${v.symbol} forward factor history`} />
-        : <Empty>History starts {v.stored.since ? dateYear(v.stored.since) : 'today'}. One point is stored a day, each time {v.symbol} is loaded and from the daily job.</Empty>}
-    </Card>
-  )
-}
-
-function Skew25Card({ v }: { v: Vol }) {
-  const hist = v.stored.skew25
-  const s = v.skew25
-  return (
-    <Card title={`${v.symbol} 25-delta skew`}
-      reading={s == null ? 'Not enough quotes at 25 delta.' : <>Call IV minus put IV at 30 days. {s < 0 ? 'Puts' : 'Calls'} bid at <span className="num text-ink">{pts(s)}</span>.</>}
-      info={<p>25-delta call implied vol minus 25-delta put implied vol, in vol points, for the expiry nearest 30 days. Below zero (red) = puts are bid. History builds from this dashboard's daily snapshots.</p>}
-      legend={<Legend items={[{ label: 'Calls bid', color: 'var(--color-pos)' }, { label: 'Puts bid', color: 'var(--color-neg)' }]} />}>
-      {hist.length > 1
-        ? <SeriesChart series={[{ label: '25Δ skew', points: hist, color: VOL_COLORS[0] }]} zeroFill format={(x) => x.toFixed(0)} ariaLabel={`${v.symbol} 25-delta skew history`} />
-        : <Empty>History starts {v.stored.since ? dateYear(v.stored.since) : 'today'}. One point is stored a day, each time {v.symbol} is loaded and from the daily job.</Empty>}
+      {shown.length > 1
+        ? <SeriesChart series={[{ label: 'Variance risk premium', points: shown, color: VOL_COLORS[0] }]} format={(x) => `${x.toFixed(0)}%`}
+            levels={mean != null && sd != null ? [{ value: mean + sd, label: '+1σ' }, { value: mean, label: 'Mean' }, { value: mean - sd, label: `${MINUS}1σ` }] : []}
+            ariaLabel={`${v.symbol} variance risk premium, ${range}`} />
+        : <Empty>No volatility history from TWS for {v.symbol}.</Empty>}
     </Card>
   )
 }
@@ -530,7 +527,7 @@ export function VolPage({ path }: { path: string }) {
         <div className="panel px-6 py-16 text-center">
           <p className="text-[15px] text-ink">Pick a ticker to read its options from TWS.</p>
           <p className="mx-auto mt-2 max-w-[60ch] text-[13px] text-ink-3">
-            Implied against realized volatility, the skew at 30, 60 and 90 days, the term structure, the forward factor and today's flow by strike.
+            Implied against realized volatility, the skew at 30, 60 and 90 days, the term structure, the variance risk premium and today's flow by strike.
             {mode === 'sim' ? ' Running on simulated data (VOL_SOURCE=sim).' : ' TWS must be open with the API enabled on port 7496.'}
           </p>
         </div>
@@ -565,8 +562,7 @@ export function VolPage({ path }: { path: string }) {
               <IvRvCard v={v} />
               <SkewCard v={v} />
               <TermCard v={v} />
-              <ForwardCard v={v} />
-              <Skew25Card v={v} />
+              <VrpCard v={v} />
             </div>
           </section>
         </>

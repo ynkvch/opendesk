@@ -249,10 +249,10 @@ class TwsSource:
                 "hv": clean(t.histVolatility), "call_volume": clean(t.callVolume), "put_volume": clean(t.putVolume),
                 "call_oi": clean(t.callOpenInterest), "put_oi": clean(t.putOpenInterest)}
 
-    async def history(self, und) -> tuple[list, list]:
+    async def history(self, und, duration: str = "1 Y") -> tuple[list, list]:
         async def one(what: str):
             try:
-                bars = await self.ib.reqHistoricalDataAsync(und, "", "1 Y", "1 day", what, True, 1)
+                bars = await self.ib.reqHistoricalDataAsync(und, "", duration, "1 day", what, True, 1)
             except Exception:
                 return []
             return [[b.date.isoformat()[:10], b.close] for b in bars if b.close and b.close > 0]
@@ -350,9 +350,9 @@ class SimSource:
         return {"spot": round(s, 2), "close": round(s * 0.99, 2), "iv": self._iv(s, s, 30), "hv": self._iv(s, s, 30) * 0.85,
                 "call_volume": None, "put_volume": None, "call_oi": None, "put_oi": None}
 
-    async def history(self, und) -> tuple[list, list]:
+    async def history(self, und, duration: str = "1 Y") -> tuple[list, list]:
         rng = self._rng("hist")
-        d, iv, rv, a, b = ny_today() - timedelta(days=730), [], [], 0.0, 0.0
+        d, iv, rv, a, b = ny_today() - timedelta(days=5 * 365), [], [], 0.0, 0.0
         base = self._iv(100, 100, 30)
         while d <= ny_today():
             if d.weekday() < 5:
@@ -556,6 +556,30 @@ async def sweep_slice(src, und, symbol: str, expiries: list[str], today: date, c
     return part
 
 
+_long_history: dict[str, tuple[str, list, list]] = {}  # symbol -> (day fetched, iv, rv)
+
+
+async def long_history(src, und, symbol: str, today: date) -> tuple[list, list]:
+    """years of 30-day implied and realized vol for the variance risk premium. the long pull is made once a day and
+    kept in memory; each read after that only asks for the last few days and lays them over it."""
+    kept = _long_history.get(symbol)
+    if kept and kept[0] == today.isoformat():
+        iv_new, rv_new = await src.history(und, "5 D")
+        merged = []
+        for old, new in ((kept[1], iv_new), (kept[2], rv_new)):
+            by_day = dict(old)
+            by_day.update(dict(new))
+            merged.append([[d, v] for d, v in sorted(by_day.items())])
+        _long_history[symbol] = (today.isoformat(), merged[0], merged[1])
+        return merged[0], merged[1]
+    iv, rv = await src.history(und, "10 Y")
+    if not iv:  # older listings or a refused request: fall back to the year the page always had
+        iv, rv = await src.history(und, "1 Y")
+    if iv:
+        _long_history[symbol] = (today.isoformat(), iv, rv)
+    return iv, rv
+
+
 async def collect(symbol: str, previous: dict | None = None) -> dict:
     symbol = symbol.upper().strip()
     today = ny_today()
@@ -564,7 +588,7 @@ async def collect(symbol: str, previous: dict | None = None) -> dict:
         und = await src.underlying(symbol)
         quote = await src.spot(und)
         spot = quote["spot"]
-        (hist_iv, hist_rv), chain = await asyncio.gather(src.history(und), src.chain(und))
+        (hist_iv, hist_rv), chain = await asyncio.gather(long_history(src, und, symbol, today), src.chain(und))
         picks = pick_expiries(chain["expiries"], today)
         roles: dict[str, set[str]] = {}
         for e in picks["term"]:

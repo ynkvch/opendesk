@@ -18,8 +18,8 @@ and uses your own data keys. There is no subscription.
 - **Sector Rotation.** The 11 sector ETFs on a relative rotation graph against SPY or QQQ.
 - **Flow and Volatility.** Any ticker's option chain from TWS, read every minute: call and put premium today
   across the whole chain, flow by strike with a zoomable strike range, the last five sessions of flow against the share price, the most traded
-  contracts, then implied against realized vol, skew at 30/60/90 days, the term structure and the 30-60 day
-  forward factor.
+  contracts, then implied against realized vol, skew at 30/60/90 days, the term structure and the variance risk
+  premium (30-day implied minus realized) over up to ten years.
 
 ## Planned
 
@@ -114,8 +114,8 @@ every minute and the rest of the chain in rotation, so the premium totals reach 
 few minutes. The flow chart uses TWS's 5-minute trade bars for each contract, today's and the last five sessions',
 with premium as each bar's volume × its average traded price × 100; it can also show 15 or 30 minutes. The bars
 come from IBKR's servers whenever TWS is open, so missed sessions are filled in later. A ticker's first build reads
-one contract at a time and takes several minutes. TWS keeps no history of an option chain, so skew and
-forward-factor history is built from one snapshot a day, stored in `data/vol.db`. Needs TWS open with the API
+one contract at a time and takes several minutes. TWS keeps no history of an option chain, so past term
+structures are built from one snapshot a day, stored in `data/vol.db`. Needs TWS open with the API
 enabled, and options market data for the ticker. To try the page without TWS, run
 `VOL_SOURCE=sim ./run.sh`: a made-up chain, kept in its own `data/vol_sim.db`.
 
